@@ -13,6 +13,7 @@
 %% Supervisor callbacks
 -export([init/1]).
 
+-define(APP, simple_chatroom).
 -define(SERVER, ?MODULE).
 
 %%====================================================================
@@ -28,7 +29,16 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
-    {ok, { {one_for_all, 0, 1}, []} }.
+	Port = application:get_env(?APP, port),
+	MWTime = application:get_env(?APP, max_wait_time),
+	ChatSessionSup = chatroom_util:child_supervisor_spec(?MODULE, chat_session_sup, [MWTime]),
+	ConnectListener = chatroom_util:child_worker_spec(connect_listener, [Port]),
+	chatroom_util:supervisor_spec(one_for_one, [ConnectListener,
+												ChatSessionSup])
+
+init([chat_session_sup, MWTime]) ->
+	Child = chatroom_util:child_worker_spec(chat_session, [MWTime]),
+	chatroom_util:supervisor_spec(simple_one_for_one, [Child]).
 
 %%====================================================================
 %% Internal functions

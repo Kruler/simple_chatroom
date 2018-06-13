@@ -1,14 +1,17 @@
 {application, simple_chatroom,
- [{description, "An OTP application"},
+ [{description, "simple chat server"},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, { simple_chatroom_app, []}},
   {applications,
    [kernel,
-    stdlib
+    stdlib,
+    lager
    ]},
-  {env,[]},
-  {modules, []},
+  {env,[{port, 7000},
+        {max_wait_time, 300000}]},
+  {modules, [simple_chatroom_app, 
+             simple_chatroome_sup]},
 
   {maintainers, []},
   {licenses, []},

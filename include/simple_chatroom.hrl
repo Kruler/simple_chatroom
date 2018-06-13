@@ -1,0 +1,3 @@
+-define(MRESTART, 10000).
+-define(MTIME, 3000).
+-define(SHUTDOWN, 2000).
