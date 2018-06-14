@@ -11,7 +11,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1,test/0]).
+-export([start/1]).
+
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -23,14 +25,25 @@
 
 -define(SERVER, ?MODULE).
 
--include("").
+-include("simple_chatroom.hrl").
 
--record(state, {}).
+-record(state, {socket,
+                owner}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-
+start(Socket) ->
+    case supervisor:start_child(chat_session_sup, [Socket]) of
+        {ok, Pid} ->
+            {ok, Pid};
+        {ok, Pid, _Info} ->
+            {ok, Pid};
+        {error, {already_started, Pid}} ->
+            {ok, Pid};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -38,8 +51,8 @@
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link([]) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(Socket) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [Socket], []).
 
 
 %%%===================================================================
@@ -57,8 +70,8 @@ start_link([]) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
-    {ok, State}.
+init([Socket]) ->
+    {ok, #state{socket = Socket}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -104,6 +117,12 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
+    {noreply, State};
+
+handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
+    {stop, normal, State};
+
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.

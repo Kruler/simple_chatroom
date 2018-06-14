@@ -16,15 +16,30 @@ supervisor_spec(Type, Workers) when is_list(Workers)
 							   andalso (Type =:= simple_one_for_one
 							   orelse Type =:= one_for_one
 							   orelse Type =:= one_for_all)->
-	{ok, {Type, ?MRESTART, ?MTIME}, Workers}.
+	{ok, {{Type, ?MRESTART, ?MTIME}, Workers}}.
 
 child_worker_spec(Mod, Args) when is_list(Args) ->
-	{Mod, {Mod, start_link, Args}, transient, ?SHUTDOWN, worker, [Mod]};
-child_supervisor_sepc(Mod, SupName, Args) when is_list(Args) ->
+	{Mod, {Mod, start_link, Args}, transient, ?SHUTDOWN, worker, [Mod]}.
+
+child_supervisor_spec(Mod, SupName, Args) when is_list(Args) ->
 	{Mod, {?MODULE, start_supervisor, [Mod, SupName, Args]}, 
-		  transient, ?SHUTDOWN, supervisor, [Mod]};
+		  transient, ?SHUTDOWN, supervisor, [Mod]}.
 
 start_supervisor(Mod, SupName, Args) ->
-	supervisor:start_link({local, SupName}, MOd, [SupName|Args]).
+	supervisor:start_link({local, SupName}, Mod, [SupName|Args]).
 
 
+
+% decode_packet(<<Type:32/binary, Payload/binary>>) ->
+% 	ok.
+% login_decode() ->
+% 	ok.
+
+% register_decode() ->
+% 	ok.
+
+% chat_decode() ->
+% 	ok.
+
+% get_list_decode() ->
+% 	ok.

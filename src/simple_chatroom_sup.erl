@@ -29,15 +29,15 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
-	Port = application:get_env(?APP, port),
-	MWTime = application:get_env(?APP, max_wait_time),
-	ChatSessionSup = chatroom_util:child_supervisor_spec(?MODULE, chat_session_sup, [MWTime]),
+	Port = application:get_env(?APP, port, 7000),
+	ChatSessionSup = chatroom_util:child_supervisor_spec(?MODULE, chat_session_sup, []),
 	ConnectListener = chatroom_util:child_worker_spec(connect_listener, [Port]),
-	chatroom_util:supervisor_spec(one_for_one, [ConnectListener,
-												ChatSessionSup])
+	chatroom_util:supervisor_spec(one_for_one, [ChatSessionSup,
+												ConnectListener
+												]);
 
-init([chat_session_sup, MWTime]) ->
-	Child = chatroom_util:child_worker_spec(chat_session, [MWTime]),
+init([chat_session_sup]) ->
+	Child = chatroom_util:child_worker_spec(chat_session, []),
 	chatroom_util:supervisor_spec(simple_one_for_one, [Child]).
 
 %%====================================================================
