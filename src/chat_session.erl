@@ -118,7 +118,8 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    {noreply, State};
+    Req = chatroom_util:decode_packet(Bin),
+    reply_action(Req, State);
 
 handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
     {stop, normal, State};
@@ -156,7 +157,24 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-decode_packet(Bin) ->
-    case erlang:binary_to_term(Bin) of
-        {ok, login, {UserName, PassWord}} ->
-            case 
+reply_action({ok, login, UserName, PassWord}) ->
+    case mysql_connection:is_valid_user(UserName, PassWord) of
+        {ok, UId} ->
+            ok;
+        {error, no_such_user} ->
+            {error, no_such_user};
+        {error, too_many_users} ->
+            lager:error("too many users with username ~p password ~p", [UserName, PassWord]),
+            {error, unexpected_error};
+        {error, Reason} ->
+            lager:error("login failed with username ~p password ~p by unexpected reason: ~p", 
+                        [UserName, PassWord, Reason]),
+            {error, unexpected_error}
+    end;
+        {ok, logout} ->
+            ok;
+        {ok, register} ->
+            ok;
+        {ok, message, ToUserName, Context} ->
+            ok
+    end.

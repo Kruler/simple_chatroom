@@ -27,3 +27,7 @@ child_supervisor_spec(Mod, SupName, Args) when is_list(Args) ->
 
 start_supervisor(Mod, SupName, Args) ->
 	supervisor:start_link({local, SupName}, Mod, [SupName|Args]).
+
+
+decode_packet(Bin) ->
+	erlang:binary_to_term(Bin).

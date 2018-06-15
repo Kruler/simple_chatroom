@@ -106,7 +106,6 @@ handle_call({check_user, UserName, PassWord}, _From, State) ->
 			{ok, _, []} ->
 				{error, no_such_user};
 			{ok, _, _Users} ->
-				lager:error("too many users with username ~p password ~p"),
 				{error, too_many_users};
 			{error ,Reason} ->
 				{error, Reason}
