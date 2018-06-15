@@ -3,7 +3,7 @@
 -define(SHUTDOWN, 2000).
 
 -define(MESSAGE_TAB, message_tab).
--define(USER_TAB, user_tab)
+-define(USER_TAB, user_tab).
 
 
 -record(user, {uid,
@@ -12,6 +12,6 @@
 			   status}).
 
 
--record(message, {to_user,
-				  from_user,
-				  message_context}).
+-record(message, {to_uid,
+				  from_uid,
+				  context}).

@@ -121,10 +121,14 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
     Req = chatroom_util:decode_packet(Bin),
-    reply_action(Req, State);
+    {Reply, NState} = reply_action(Req, State),
+    Packet = chatroom_util:encode_packet(Reply),
+    gen_tcp:send(Packet),
+    {noreply, NState};
 
-handle_info(Message, State) ->
-
+handle_info(Message, #state{socket = Socket} = State) ->
+    Packet = chatroom_util:encode_packet(Message),
+    gen_tcp:send(Socket, Packet),
     {noreply, State};
 
 handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
@@ -163,25 +167,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_action({ok, login, UserName, PassWord}, State) ->
-    case mysql_connection:is_valid_user(UserName, PassWord) of
-        {ok, UId} ->
-            ok;
-        {error, no_such_user} ->
-            {error, no_such_user};
-        {error, too_many_users} ->
-            lager:error("too many users with username ~p password ~p", [UserName, PassWord]),
-            {error, unexpected_error};
-        {error, Reason} ->
-            lager:error("login failed with username ~p password ~p by unexpected reason: ~p", 
-                        [UserName, PassWord, Reason]),
-            {error, unexpected_error}
-    end;
+reply_action({login, UserName, PassWord}, State) ->
+    {Reply, NState} = 
+        case mysql_connection:is_valid_user(UserName, PassWord) of
+            {ok, UId, Friends} ->
+                {{ok, UId, Friends}, State#state{owner = UId,
+                                                 friends = Friends}};
+            {error, no_such_user} ->
+                {{error, no_such_user}, State};
+            {error, too_many_users} ->
+                lager:error("too many users with username ~p password ~p", [UserName, PassWord]),
+                {{error, unexpected_error}, State};
+            {error, Reason} ->
+                lager:error("login failed with username ~p password ~p by unexpected reason: ~p", 
+                            [UserName, PassWord, Reason]),
+                {{error, unexpected_error}, State}
+        end,
+    {Reply, State};
 
-reply_action({ok, logout}, State} ->
-    {stop, normal, State};
+reply_action(logout, #state{owner = UId} = State) ->
+    lager:info("user ~p logout", [UId]),
+    Reply = {ok, ok},
+    {Reply, State};
 
-reply_action({ok, register, UserName, PassWord}, #state{owner = undefined} = State} ->
+reply_action({register, UserName, PassWord}, #state{owner = undefined} = State) ->
     {NUId, NUserName, NFriends, Reply} = 
         case mysql_connection:add_user(UserName, PassWord) of
             {ok, UId, Friends} ->
@@ -189,21 +198,24 @@ reply_action({ok, register, UserName, PassWord}, #state{owner = undefined} = Sta
             {error, Reason} ->
                 {undefined, undefined, undefined, {error, register_failed, Reason}}
         end,
-    {noreply, State#state{owner = NUId,
+    {Reply, State#state{owner = NUId,
                           username = NUserName,
                           friends = NFriends}};
 
-reply_action({ok, message, ToUId, Context}, #state{friends = Friends} = State) ->
-    case sets:is_element(ToUId, Friends) of
-        true ->
-            Message = #message{to_uid = ToUId,
-                               from_uid = self(),
-                               context = Context},
-            message_passageway:send_message(Message);
-        false ->
-            ok
-    end,
-    {noreply, State};
+reply_action({message, ToUId, Context}, State) ->
+    #state{friends = Friends} = State,
+    Reply = 
+        case sets:is_element(ToUId, Friends) of
+            true ->
+                Message = #message{to_uid = ToUId,
+                                   from_uid = self(),
+                                   context = Context},
+                message_passageway:send_message(Message),
+                {ok, ok};
+            false ->
+                {send_failed, not_friend}
+        end,
+    {Reply, State};
 
 reply_action(_, State) ->
-    {noreply, State}.
+    {{error, invalid_packet}, State}.

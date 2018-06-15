@@ -11,7 +11,10 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([is_valid_user/2,
+		 add_user/2]).
+
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -165,18 +168,18 @@ handle_info(prepare_init,  State) ->
 		case mysql:prepare(Conn, <<"select id from users where username = ? and password = ?">>) of
 			{ok, CUStmt} ->
 				CUStmt;
-			{error, Reason} ->
+			{error, Reason0} ->
 				CheckUserS
 		end,
 	NAddUserS = 
 		case mysql:prepare(Conn, <<"insert into users(id, username, password) values(?, ?)">>) of
 			{ok, AUStmt} ->
 				AUStmt;
-			{error, Reason} ->
+			{error, Reason1} ->
 				AddUserS
 		end,
 	{noreply, State#state{check_user_stmt = NCheckUserS,
-						  add_user_stmt = NAddUserS}}
+						  add_user_stmt = NAddUserS}};
 
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),

@@ -31,3 +31,6 @@ start_supervisor(Mod, SupName, Args) ->
 
 decode_packet(Bin) ->
 	erlang:binary_to_term(Bin).
+
+encode_packet(Term) ->
+	erlang:term_to_binary(Term).

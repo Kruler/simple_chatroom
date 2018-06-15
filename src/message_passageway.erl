@@ -11,7 +11,13 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([send_message/1,
+		 keep_message_len/1,
+		 clear_cache/0,
+		 clear_cache/1]).
+
+
+-export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -36,7 +42,7 @@ send_message(#message{} = Message) ->
 keep_message_len(UId) ->
 	case ets:lookup(?MESSAGE_TAB, UId) of
 		[{UId, Messages}] ->
-			len(Messages);
+			length(Messages);
 		[] ->
 			0;
 		{error, Reason} ->
@@ -112,14 +118,14 @@ handle_cast({set_maxqlen, Len}, State) ->
 	{noreply, State#state{max_queue_len = Len}};
 
 handle_cast(#message{to_uid = ToUId} = Message, State) ->
-	#state{max_queue_len = MaxMessageLen} = State;
+	#state{max_queue_len = MaxMessageLen} = State,
 	case ets:lookup(?USER_TAB, ToUId) of
 		[{ToUId, Pid}] ->
 			Pid ! Message;
 		[] ->
 			case ets:lookup(?MESSAGE_TAB, ToUId) of
-				[{ToUId, MessageQ}] when len(MessageQ) >= MaxMessageLen->
-					{_, NMessageQ0} = queue:out(MessageQss),
+				[{ToUId, MessageQ}] when length(MessageQ) >= MaxMessageLen->
+					{_, NMessageQ0} = queue:out(MessageQ),
 					NMessageQ1 = queue:in(Message, NMessageQ0),
 					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ1});
 				[{ToUId, MessageQ}] ->
