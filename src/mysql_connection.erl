@@ -4,16 +4,14 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  2018-06-13 23:59:54
+%%% Created :  2018-06-15 10:14:31
 %%%-------------------------------------------------------------------
--module(chat_session).
+-module(mysql_connection).
 
 -behaviour(gen_server).
 
 %% API
--export([start/1]).
-
--export([start_link/1]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -27,23 +25,27 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {socket,
-                owner}).
+-record(state, {connection,
+	 			opt,
+	 			add_user_stmt,
+	 			check_user_stmt}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start(Socket) ->
-    case supervisor:start_child(chat_session_sup, [Socket]) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {ok, Pid, _Info} ->
-            {ok, Pid};
-        {error, {already_started, Pid}} ->
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+is_valid_user(UserName, PassWord) ->
+	try gen_server:call(?MODULE, {check_user, UserName, PassWord}) of
+		Rep -> Rep
+	catch _:Exception ->
+			{error, Exception}
+	end.
+
+add_user(UserName, PassWord) ->
+	try gen_server:call(?MODULE, {add_user, UserName, PassWord}) of
+		Rep -> Rep
+	catch _:Exception ->
+			{error, Exception}
+	end.
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -51,8 +53,8 @@ start(Socket) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Socket) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [Socket], []).
+start_link(MysqlOpt) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [MysqlOpt], []).
 
 
 %%%===================================================================
@@ -70,8 +72,16 @@ start_link(Socket) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Socket]) ->
-    {ok, #state{socket = Socket}}.
+init([MysqlOpt]) ->
+	case mysql:start_link(MysqlOpt) of
+		{ok, Pid} ->
+			self() ! prepare_init,
+			{ok, #state{opt = MysqlOpt, 
+						connection = Pid}};
+		{error, Reason} ->
+			lager:error("connect to mysql by option ~p failed: ~p", [MysqlOpt, Reason]),
+			ignore
+	end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -87,6 +97,37 @@ init([Socket]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({check_user, UserName, PassWord}, _From, State) ->
+	#state{check_user_stmt = CUStmt} = State,
+	Reply = 
+		case mysql:execute(CUStmt, [UserName, PassWord]) of
+			{ok, _, [UId]} ->
+				{ok, UId};
+			{ok, _, []} ->
+				{error, no_such_user};
+			{ok, _, _Users} ->
+				lager:error("too many users with username ~p password ~p"),
+				{error, too_many_users};
+			{error ,Reason} ->
+				{error, Reason}
+		end,
+	{reply, Reply, State};
+
+handle_call({add_user, UserName, PassWord}, _From, State) ->
+	#state{add_user_stmt = AUStmt} = State,
+	Reply = 
+		case mysql:execute(AUStmt, [UserName, PassWord]) of
+			{ok, _, [UId]} ->
+				{ok, UId};
+			{ok, _, []} ->
+				{error, no_such_user};
+			{ok, _, _Users} ->
+				lager:error("too many users with username ~p password ~p"),
+				{error, too_many_users};
+			{error ,Reason} ->
+				{error, Reason}
+		end,
+	{reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -117,11 +158,26 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    {noreply, State};
-
-handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
-    {stop, normal, State};
+handle_info(prepare_init,  State) ->
+	#state{connection = Conn,
+		   check_user_stmt = CheckUserS,
+		   add_user_stmt = AddUserS} = State,
+	NCheckUserS = 
+		case mysql:prepare(Conn, <<"select id from users where username = ? and password = ?">>) of
+			{ok, CUStmt} ->
+				CUStmt;
+			{error, Reason} ->
+				CheckUserS
+		end,
+	NAddUserS = 
+		case mysql:prepare(Conn, <<"insert into users(id, username, password) values(?, ?)">>) of
+			{ok, AUStmt} ->
+				AUStmt;
+			{error, Reason} ->
+				AddUserS
+		end,
+	{noreply, State#state{check_user_stmt = NCheckUserS,
+						  add_user_stmt = NAddUserS}}
 
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
@@ -156,7 +212,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-decode_packet(Bin) ->
-    case erlang:binary_to_term(Bin) of
-        {ok, login, {UserName, PassWord}} ->
-            case 

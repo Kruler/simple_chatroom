@@ -27,19 +27,3 @@ child_supervisor_spec(Mod, SupName, Args) when is_list(Args) ->
 
 start_supervisor(Mod, SupName, Args) ->
 	supervisor:start_link({local, SupName}, Mod, [SupName|Args]).
-
-
-
-% decode_packet(<<Type:32/binary, Payload/binary>>) ->
-% 	ok.
-% login_decode() ->
-% 	ok.
-
-% register_decode() ->
-% 	ok.
-
-% chat_decode() ->
-% 	ok.
-
-% get_list_decode() ->
-% 	ok.

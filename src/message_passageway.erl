@@ -4,16 +4,14 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  2018-06-13 23:59:54
+%%% Created :  2018-06-15 09:16:13
 %%%-------------------------------------------------------------------
--module(chat_session).
+-module(message_passageway).
 
 -behaviour(gen_server).
 
 %% API
--export([start/1]).
-
--export([start_link/1]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -27,23 +25,27 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {socket,
-                owner}).
+-record(state, {max_queue_len}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start(Socket) ->
-    case supervisor:start_child(chat_session_sup, [Socket]) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {ok, Pid, _Info} ->
-            {ok, Pid};
-        {error, {already_started, Pid}} ->
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
+
+keep_message_len(UId) ->
+	case ets:lookup(?MESSAGE_TAB, UId) of
+		[{UId, Messages}] ->
+			len(Messages);
+		[] ->
+			0;
+		{error, Reason} ->
+			{error, Reason}
+	end.
+
+clear_cache(UId) ->
+	ets:delete(?MESSAGE_TAB, UId).
+
+clear_cache() ->
+	ets:delete(?MESSAGE_TAB).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -51,8 +53,8 @@ start(Socket) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Socket) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [Socket], []).
+start_link(MaxMessageLen) ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [MaxMessageLen], []).
 
 
 %%%===================================================================
@@ -70,8 +72,9 @@ start_link(Socket) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Socket]) ->
-    {ok, #state{socket = Socket}}.
+init([MaxMessageLen]) ->
+	ets:new(?MESSAGE_TAB, [set, named_table, public]),
+    {ok, #state{max_queue_len = MaxMessageLen}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -103,6 +106,35 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_cast({set_maxqlen, Len}, State) ->
+	{noreply, State#state{max_queue_len = Len}};
+
+handle_cast(#message{to_uid = ToUId} = Message, State) ->
+	#state{max_queue_len = MaxMessageLen} = State;
+	case ets:lookup(?USER_TAB, ToUId) of
+		[{ToUId, Pid}] ->
+			Pid ! Message;
+		[] ->
+			case ets:lookup(?MESSAGE_TAB, ToUId) of
+				[{ToUId, MessageQ}] when len(MessageQ) >= MaxMessageLen->
+					{_, NMessageQ0} = queue:out(MessageQss),
+					NMessageQ1 = queue:in(Message, NMessageQ0),
+					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ1});
+				[{ToUId, MessageQ}] ->
+					NMessageQ = queue:in(Message, MessageQ),
+					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ});					
+				[] ->
+					MessageQ = queue:new(),
+					NMessageQ = queue:in(Message, MessageQ),
+					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ});
+				{error, Reason} ->
+					lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?MESSAGE_TAB, Reason])
+			end;
+		{error, Reason} ->
+			lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?USER_TAB, Reason])
+	end,
+	{noreply, State};
+
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
     {noreply, State}.
@@ -117,12 +149,6 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    {noreply, State};
-
-handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
-    {stop, normal, State};
-
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.
@@ -156,7 +182,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-decode_packet(Bin) ->
-    case erlang:binary_to_term(Bin) of
-        {ok, login, {UserName, PassWord}} ->
-            case 
