@@ -28,7 +28,9 @@
 -include("simple_chatroom.hrl").
 
 -record(state, {socket,
-                owner}).
+                owner,
+                username,
+                friends}).
 
 %%%===================================================================
 %%% API
@@ -52,7 +54,7 @@ start(Socket) ->
 %% @end
 %%--------------------------------------------------------------------
 start_link(Socket) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [Socket], []).
+    gen_server:start_link(?MODULE, [Socket], []).
 
 
 %%%===================================================================
@@ -121,6 +123,10 @@ handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
     Req = chatroom_util:decode_packet(Bin),
     reply_action(Req, State);
 
+handle_info(Message, State) ->
+
+    {noreply, State};
+
 handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
     {stop, normal, State};
 
@@ -157,7 +163,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_action({ok, login, UserName, PassWord}) ->
+reply_action({ok, login, UserName, PassWord}, State) ->
     case mysql_connection:is_valid_user(UserName, PassWord) of
         {ok, UId} ->
             ok;
@@ -171,10 +177,33 @@ reply_action({ok, login, UserName, PassWord}) ->
                         [UserName, PassWord, Reason]),
             {error, unexpected_error}
     end;
-        {ok, logout} ->
-            ok;
-        {ok, register} ->
-            ok;
-        {ok, message, ToUserName, Context} ->
+
+reply_action({ok, logout}, State} ->
+    {stop, normal, State};
+
+reply_action({ok, register, UserName, PassWord}, #state{owner = undefined} = State} ->
+    {NUId, NUserName, NFriends, Reply} = 
+        case mysql_connection:add_user(UserName, PassWord) of
+            {ok, UId, Friends} ->
+                {UId, Friends, UserName, {ok, ok}};
+            {error, Reason} ->
+                {undefined, undefined, undefined, {error, register_failed, Reason}}
+        end,
+    {noreply, State#state{owner = NUId,
+                          username = NUserName,
+                          friends = NFriends}};
+
+reply_action({ok, message, ToUId, Context}, #state{friends = Friends} = State) ->
+    case sets:is_element(ToUId, Friends) of
+        true ->
+            Message = #message{to_uid = ToUId,
+                               from_uid = self(),
+                               context = Context},
+            message_passageway:send_message(Message);
+        false ->
             ok
-    end.
+    end,
+    {noreply, State};
+
+reply_action(_, State) ->
+    {noreply, State}.

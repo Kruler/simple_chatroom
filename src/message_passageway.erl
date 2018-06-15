@@ -30,6 +30,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+send_message(#message{} = Message) ->
+	gen_server:cast(?MODULE, Message).
 
 keep_message_len(UId) ->
 	case ets:lookup(?MESSAGE_TAB, UId) of
