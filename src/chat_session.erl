@@ -170,9 +170,16 @@ code_change(_OldVsn, State, _Extra) ->
 reply_action({login, UserName, PassWord}, State) ->
     {Reply, NState} = 
         case mysql_connection:is_valid_user(UserName, PassWord) of
-            {ok, UId, Friends} ->
-                {{ok, UId, Friends}, State#state{owner = UId,
-                                                 friends = Friends}};
+            ok ->
+            	case mysql_connection:is_valid_password(UserName, PassWord) of
+            		{ok, UId} ->
+            			{{ok, UId}, State};
+            		{error, password_err} ->
+            			{{error, password_err}, State};
+            		{error, Reason} ->
+            			lager:error("check password with username ~p password ~p", [UserName, PassWord]),
+            			{{error, unexpected_error}, State}
+            	end;
             {error, no_such_user} ->
                 {{error, no_such_user}, State};
             {error, too_many_users} ->

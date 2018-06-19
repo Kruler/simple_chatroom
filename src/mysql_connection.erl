@@ -112,8 +112,8 @@ handle_call({check_user, UserName}, _From, State) ->
 	#state{check_user_stmt = CUStmt} = State,
 	Reply = 
 		case mysql:execute(CUStmt, [UserName]) of
-			{ok, _, [UId]} ->
-				{ok, UId};
+			{ok, _, [_UId]} ->
+				ok;
 			{ok, _, []} ->
 				{error, no_such_user};
 			{ok, _, _Users} ->
@@ -128,10 +128,8 @@ handle_call({check_password, UserName, PassWord}, _From, State) ->
 		case mysql:execute(CPStmt, [UserName, PassWord]) of
 			{ok, _, [UId]} ->
 				{ok, UId};
-			{ok, _, []} ->
-				{error, no_such_user};
-			{ok, _, _Users} ->
-				{error, too_many_users};
+			{ok, _, _} ->
+				{error, password_err};
 			{error ,Reason} ->
 				{error, Reason}
 		end,
@@ -141,18 +139,19 @@ handle_call({add_user, UserName, PassWord}, _From, State) ->
 	#state{add_user_stmt = AUStmt,
 		   check_user_stmt = CUStmt} = State,
 	Reply = 
-		case mysql:execute(CUStmt, [UserName])
-		case mysql:execute(AUStmt, [UserName, PassWord]) of
-			ok ->
-				ok;
+		case mysql:execute(CUStmt, [UserName]) of
+			{ok, _, [_UId|_]} ->
+				{error, already_existed};
 			{ok, _, []} ->
-				{error, no_such_user};
-			{ok, _, _Users} ->
-				lager:error("too many users with username ~p password ~p"),
-				{error, too_many_users};
-			{error ,Reason} ->
+				case mysql:execute(AUStmt, [UserName, PassWord]) of
+					ok ->
+						ok;
+					{error ,Reason} ->
+						{error, Reason}
+				end;
+			{error, Reason} ->
 				{error, Reason}
-		end,
+		end,	
 	{reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
@@ -187,7 +186,7 @@ handle_cast(_Msg, State) ->
 handle_info(prepare_init,  State) ->
 	#state{connection = Conn,
 		   check_user_stmt = CheckUserS,
-		   check_passwd_stmt = CheckPassS,
+		   check_password_stmt = CheckPassS,
 		   add_user_stmt = AddUserS} = State,
 	case mysql:query(Conn, <<"show databases">>) of
 		{ok, _, Databases} ->
@@ -221,7 +220,7 @@ handle_info(prepare_init,  State) ->
 			{ok, CUStmt} ->
 				CUStmt;
 			{error, Reason0} ->
-				lager:error("prepare check_user_stmt failed;~p", [Reason1]),
+				lager:error("prepare check_user_stmt failed;~p", [Reason0]),
 				CheckUserS
 		end,
 	NCheckPassS = 
