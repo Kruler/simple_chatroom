@@ -11,7 +11,8 @@
 -behaviour(gen_server).
 
 %% API
--export([is_valid_user/2,
+-export([is_valid_user/1,
+		 is_valid_password/2,
 		 add_user/2]).
 
 -export([start_link/1]).
@@ -31,13 +32,20 @@
 -record(state, {connection,
 	 			opt,
 	 			add_user_stmt,
-	 			check_user_stmt}).
+	 			check_user_stmt,
+	 			check_password_stmt}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-is_valid_user(UserName, PassWord) ->
-	try gen_server:call(?MODULE, {check_user, UserName, PassWord}) of
+is_valid_user(UserName) ->
+	try gen_server:call(?MODULE, {check_user, UserName}) of
+		Rep -> Rep
+	catch _:Exception ->
+			{error, Exception}
+	end.
+is_valid_password(UserName, PassWord) ->
+	try gen_server:call(?MODULE, {check_password, UserName, PassWord}) of
 		Rep -> Rep
 	catch _:Exception ->
 			{error, Exception}
@@ -100,10 +108,24 @@ init([MysqlOpt]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({check_user, UserName, PassWord}, _From, State) ->
+handle_call({check_user, UserName}, _From, State) ->
 	#state{check_user_stmt = CUStmt} = State,
 	Reply = 
-		case mysql:execute(CUStmt, [UserName, PassWord]) of
+		case mysql:execute(CUStmt, [UserName]) of
+			{ok, _, [UId]} ->
+				{ok, UId};
+			{ok, _, []} ->
+				{error, no_such_user};
+			{ok, _, _Users} ->
+				{error, too_many_users};
+			{error ,Reason} ->
+				{error, Reason}
+		end,
+	{reply, Reply, State};
+handle_call({check_password, UserName, PassWord}, _From, State) ->
+	#state{check_password_stmt = CPStmt} = State,
+	Reply = 
+		case mysql:execute(CPStmt, [UserName, PassWord]) of
 			{ok, _, [UId]} ->
 				{ok, UId};
 			{ok, _, []} ->
@@ -116,11 +138,13 @@ handle_call({check_user, UserName, PassWord}, _From, State) ->
 	{reply, Reply, State};
 
 handle_call({add_user, UserName, PassWord}, _From, State) ->
-	#state{add_user_stmt = AUStmt} = State,
+	#state{add_user_stmt = AUStmt,
+		   check_user_stmt = CUStmt} = State,
 	Reply = 
+		case mysql:execute(CUStmt, [UserName])
 		case mysql:execute(AUStmt, [UserName, PassWord]) of
-			{ok, _, [UId]} ->
-				{ok, UId};
+			ok ->
+				ok;
 			{ok, _, []} ->
 				{error, no_such_user};
 			{ok, _, _Users} ->
@@ -163,23 +187,62 @@ handle_cast(_Msg, State) ->
 handle_info(prepare_init,  State) ->
 	#state{connection = Conn,
 		   check_user_stmt = CheckUserS,
+		   check_passwd_stmt = CheckPassS,
 		   add_user_stmt = AddUserS} = State,
+	case mysql:query(Conn, <<"show databases">>) of
+		{ok, _, Databases} ->
+			case lists:member(lists:flatten(Databases), <<"chatroom">>) of
+				true ->
+					lager:info("database chatroom already exist");
+				_ ->
+					case mysql:query(Conn, <<"create databases chatroom;", 
+									         "use chatroom;",
+									         "show tables;">>) of
+						{ok, _, Tables} ->
+							case lists:member(lists:flatten(Tables), <<"user">>) of
+								true ->
+									lager:info("table user already existed");
+								_ ->
+									mysql:query(Conn, <<"create table users(id INT NOT NULL AUTO_INCREMENT, ",
+														"username VARCHAR(20) NOT NULL, ",
+														"password VARCHAR(20) NOT NULL,",
+														"PRIMARY KEY(id))ENGINE=innoDB DEFAULT CHARSET=utf8">>)
+							end;
+						{error, Reason} ->
+							lager:error("check tables failed: ~p", Reason)
+					end
+			end;
+		{error, Reason} ->
+			lager:error("check databases failed: ~p", [Reason]),
+			ok
+	end,
 	NCheckUserS = 
-		case mysql:prepare(Conn, <<"select id from users where username = ? and password = ?">>) of
+		case mysql:prepare(Conn, <<"select id from users where username = ?">>) of
 			{ok, CUStmt} ->
 				CUStmt;
 			{error, Reason0} ->
+				lager:error("prepare check_user_stmt failed;~p", [Reason1]),
 				CheckUserS
 		end,
+	NCheckPassS = 
+		case mysql:prepare(Conn, <<"select id from users where username = ? and password = ?">>) of
+			{ok, CPStmt} ->
+				CPStmt;
+			{error, Reason1} ->
+				lager:error("prepare check_password_stmt failed;~p", [Reason1]),
+				CheckPassS
+		end,
 	NAddUserS = 
-		case mysql:prepare(Conn, <<"insert into users(id, username, password) values(?, ?)">>) of
+		case mysql:prepare(Conn, <<"insert into users(username, password) values(?, ?)">>) of
 			{ok, AUStmt} ->
 				AUStmt;
-			{error, Reason1} ->
+			{error, Reason2} ->
+				lager:error("prepare add_user_stmt failed;~p", [Reason2]),
 				AddUserS
 		end,
 	{noreply, State#state{check_user_stmt = NCheckUserS,
-						  add_user_stmt = NAddUserS}};
+						  add_user_stmt = NAddUserS,
+						  check_password_stmt = NCheckPassS}};
 
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),

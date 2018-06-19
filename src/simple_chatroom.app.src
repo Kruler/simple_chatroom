@@ -11,8 +11,7 @@
   {env,[{port, 7000},
         {mysql_opt, [{host, "localhost"}, 
                      {user, "root"},
-                     {password, ""}, 
-                     {database, "chatroom"}]}
+                     {password, ""}]}
         ]},
   {modules, [simple_chatroom_app, 
              simple_chatroome_sup]},
