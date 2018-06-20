@@ -234,5 +234,7 @@ check_user(UserName) ->
 
 match_user_spec(Query) ->
     Fields = record_info(fields, user),
-    MatchHead = [user|lists:map(fun(Field) -> proplists:get_value(Field, Query, '_') end, Fields)],
+    MatchHead = list_to_tuple([user|lists:map(
+                                        fun(Field) -> proplists:get_value(Field, Query, '_') 
+                                    end, Fields)]),
     {MatchHead, [], ['$_']}.
