@@ -8,7 +8,8 @@
     stdlib,
     lager
    ]},
-  {env,[{port, 7000}]},
+  {env,[{port, 7000},
+        {max_message_len, 10}]},
   {modules, [simple_chatroom_app, 
              simple_chatroome_sup]},
 

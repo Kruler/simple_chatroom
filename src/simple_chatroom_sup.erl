@@ -33,11 +33,16 @@ start_link() ->
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
 	Port = application:get_env(?APP, port, 7000),
+	MaxMLen = application:get_env(?APP, max_message_len, 10),
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),
 	ConnectListener = child_worker_spec(connect_listener, [Port]),
+	ChatroomManager = child_worker_spec(chatroom_manager, []),
+	MessagePWay = child_worker_spec(message_passageway, [MaxMLen]),
 	
 	supervisor_spec(one_for_one, [ChatSessionSup,
-								  ConnectListener
+								  ConnectListener,
+								  ChatroomManager,
+								  MessagePWay
 								  ]);
 
 init([chat_session_sup]) ->
