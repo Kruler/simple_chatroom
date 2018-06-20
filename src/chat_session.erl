@@ -198,16 +198,14 @@ reply_action(logout, #state{owner = UId} = State) ->
     {Reply, State};
 
 reply_action({register, UserName, PassWord}, #state{owner = undefined} = State) ->
-    {NUId, NUserName, NFriends, Reply} = 
+    Reply = 
         case mysql_connection:add_user(UserName, PassWord) of
-            {ok, UId, Friends} ->
-                {UId, Friends, UserName, {ok, ok}};
+            ok ->
+                {ok, ok};
             {error, Reason} ->
-                {undefined, undefined, undefined, {error, register_failed, Reason}}
+                {error, register_failed, Reason}
         end,
-    {Reply, State#state{owner = NUId,
-                          username = NUserName,
-                          friends = NFriends}};
+    {Reply, State};
 
 reply_action({message, ToUId, Context}, State) ->
     #state{friends = Friends} = State,

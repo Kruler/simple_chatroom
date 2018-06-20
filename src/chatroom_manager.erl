@@ -25,16 +25,20 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {}).
+-record(state, {user_count,
+                }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-user_login(UId, PId) ->
-    gen_server:call(?MODULE, {login, UId, PId}).
+user_login(UserName, PassWord, PId) ->
+    gen_server:call(?MODULE, {login, UserName, PassWord, PId}).
 
 user_logout(UId) ->
     gen_server:call(?MODULE, {logout, UId}).
+
+register(UserName, PassWord) ->
+    gen_server:call(?MODULE, {register, UserName, PassWord})
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server

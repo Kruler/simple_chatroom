@@ -8,11 +8,7 @@
     stdlib,
     lager
    ]},
-  {env,[{port, 7000},
-        {mysql_opt, [{host, "localhost"}, 
-                     {user, "root"},
-                     {password, ""}]}
-        ]},
+  {env,[{port, 7000}]},
   {modules, [simple_chatroom_app, 
              simple_chatroome_sup]},
 

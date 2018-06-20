@@ -31,10 +31,8 @@ start_link() ->
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
 	Port = application:get_env(?APP, port, 7000),
-	MysqlOpt = application:get_env(?APP, mysql_opt, []),
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),
 	ConnectListener = child_worker_spec(connect_listener, [Port]),
-	% MysqlOpt = chatroom_util:child_worker_spec(mysql_connection, [MysqlOpt]),
 	
 	chatroom_util:supervisor_spec(one_for_one, [ChatSessionSup,
 												ConnectListener
