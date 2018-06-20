@@ -181,7 +181,7 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({'EXIT', Pid, Why}, State) ->
-    case ets:match_object(?USER_TAB, #user{link_pid = Pid}) of
+    case ets:select(?USER_TAB, [match_user_spec([{link_pid, Pid}])]) of
         [] ->
             ok;
         [#user{uid = UId} = User] ->
@@ -225,9 +225,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 check_user(UserName) ->
-    case ets:match_object(?USER_TAB, #user{username = UserName}) of
+    case ets:select(?USER_TAB, [match_user_spec([{username, UserName}])]) of
         [] ->
             {error, no_such_user};
         [User] ->
             {ok, User}
     end.
+
+match_user_spec(Query) ->
+    Fields = record_info(fields, user),
+    MatchHead = [user|lists:map(fun(Field) -> proplists:get_value(Field, Query, '_') end, Fields)],
+    {MatchHead, [], ['$_']}.
