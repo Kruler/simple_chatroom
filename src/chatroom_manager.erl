@@ -11,6 +11,12 @@
 -behaviour(gen_server).
 
 %% API
+-export([user_login/3,
+         user_logout/1,
+         register/2,
+         get_users/0,
+         get_online_user/0]).
+
 -export([start_link/0]).
 
 %% gen_server callbacks
@@ -25,20 +31,72 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {user_count,
-                }).
+-record(state, {}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 user_login(UserName, PassWord, PId) ->
-    gen_server:call(?MODULE, {login, UserName, PassWord, PId}).
+    case check_user(UserName) of
+        {ok, #user{password = PassWord,
+                   status = ?OFFLINE} = User} ->
+            ets:insert(?USER_TAB, User#user{status = ?ONELINE,
+                                            link_pid = PId}),
+            gen_server:call(?SERVER, {link, PId});
+        {ok, #user{password = PassWord,
+                   status = ?ONELINE,
+                   link_pid = OldPId} = User} ->
+            gen_server:call(?SERVER, {unlink, OldPId}),
+            chat_session:stop(OldPId),
+            ets:insert(?USER_TAB, User#user{status = ?ONELINE,
+                                            link_pid = PId}),
+            gen_server:call(?SERVER, {link, PId});           
+        {ok, #user{}} ->
+            {error, password_err};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 user_logout(UId) ->
-    gen_server:call(?MODULE, {logout, UId}).
+    case ets:lookup(?USER_TAB, UId) of
+        [#user{status = ?ONELINE, 
+               link_pid = Pid} = User] ->
+            gen_server:call(?SERVER, {unlink, Pid}),
+            ets:insert(?USER_TAB, User#user{status = ?OFFLINE, 
+                                            link_pid = undefined}),
+            chat_session:stop(Pid);
+        [#user{status = ?OFFLINE}] ->
+            {error, already_logout};
+        [] ->
+            {error, no_such_user};
+        {error, Reason} ->
+            {error, Reason}
+    end.
 
 register(UserName, PassWord) ->
-    gen_server:call(?MODULE, {register, UserName, PassWord})
+    case check_user(UserName) of
+        {ok, _} ->
+            {error, already_existed};
+        {error, no_such_user} ->
+            UId =
+                case ets:last(?USER_TAB) of
+                    '$end_of_table' ->
+                        1;
+                    LastUId ->
+                        LastUId + 1
+                end,
+            ets:insert(?USER_TAB, #user{uid = UId,
+                                        username = UserName,
+                                        password = PassWord}),
+            ok
+    end.
+
+get_users() ->
+    lists:map(fun(#user{uid = UId, status = Status, username = UserName}) -> {UId, UserName, Status} end, 
+              ets:tab2list(?USER_TAB)).
+
+get_online_user() ->
+    lists:filter(fun({_, _, Status}) -> Status =:= ?ONELINE end, get_users()).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -66,6 +124,7 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
+    erlang:process_flag(trap_exit, true),
     ets:new(?USER_TAB, [set, named_table, public]),
     {ok, #state{}}.
 
@@ -83,12 +142,12 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call({login, UId, PId}, _From, State) ->
-    ets:insert(?USER_TAB, {UId, PId}),
+handle_call({link, Pid}, _From, State) ->
+    link(Pid),
     {reply, ok, State};
 
-handle_call({logout, UId}, _From, State) ->
-    ets:delete(?USER_TAB, UId),
+handle_call({unlink, Pid}, _From, State) ->
+    unlink(Pid),
     {reply, ok, State};
 
 handle_call(_Request, _From, State) ->
@@ -120,6 +179,17 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info({'EXIT', Pid, Why}, State) ->
+    case ets:match_object(?USER_TAB, #user{link_pid = Pid}) of
+        [] ->
+            ok;
+        [#user{uid = UId} = User] ->
+            lager:info("~p exit with reason: ~p", [UId, Why]),
+            ets:insert(?USER_TAB, User#user{status = ?OFFLINE,
+                                            link_pid = undefined})
+    end,
+    {noreply, State};
+
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.
@@ -153,3 +223,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+check_user(UserName) ->
+    case ets:match_object(?USER_TAB, #user{username = UserName}) of
+        [] ->
+            {error, no_such_user};
+        [User] ->
+            {ok, User}
+    end.

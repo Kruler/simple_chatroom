@@ -8,6 +8,8 @@
 -behaviour(supervisor).
 
 %% API
+-export([start_supervisor/3]).
+
 -export([start_link/0]).
 
 %% Supervisor callbacks
@@ -34,9 +36,9 @@ init([]) ->
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),
 	ConnectListener = child_worker_spec(connect_listener, [Port]),
 	
-	chatroom_util:supervisor_spec(one_for_one, [ChatSessionSup,
-												ConnectListener
-												]);
+	supervisor_spec(one_for_one, [ChatSessionSup,
+								  ConnectListener
+								  ]);
 
 init([chat_session_sup]) ->
 	Child = child_worker_spec(chat_session, []),

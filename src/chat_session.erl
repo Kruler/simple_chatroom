@@ -11,7 +11,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start/1]).
+-export([start/1,
+         stop/1]).
 
 -export([start_link/1]).
 
@@ -29,8 +30,7 @@
 
 -record(state, {socket,
                 owner,
-                username,
-                friends}).
+                username}).
 
 %%%===================================================================
 %%% API
@@ -46,6 +46,9 @@ start(Socket) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+stop(Pid) ->
+    gen_server:cast(Pid, stop).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -105,6 +108,9 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_cast(stop, State) ->
+    {stop, normql, State};
+
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
     {noreply, State}.
@@ -120,14 +126,14 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    Req = chatroom_util:decode_packet(Bin),
+    Req = decode_packet(Bin),
     {Reply, NState} = reply_action(Req, State),
-    Packet = chatroom_util:encode_packet(Reply),
-    gen_tcp:send(Packet),
+    Packet = encode_packet(Reply),
+    gen_tcp:send(Socket, Packet),
     {noreply, NState};
 
 handle_info(Message, #state{socket = Socket} = State) ->
-    Packet = chatroom_util:encode_packet(Message),
+    Packet = encode_packet(Message),
     gen_tcp:send(Socket, Packet),
     {noreply, State};
 
@@ -168,59 +174,43 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 reply_action({login, UserName, PassWord}, State) ->
-    {Reply, NState} = 
-        case mysql_connection:is_valid_user(UserName, PassWord) of
-            ok ->
-            	case mysql_connection:is_valid_password(UserName, PassWord) of
-            		{ok, UId} ->
-            			{{ok, UId}, State};
-            		{error, password_err} ->
-            			{{error, password_err}, State};
-            		{error, Reason} ->
-            			lager:error("check password with username ~p password ~p", [UserName, PassWord]),
-            			{{error, unexpected_error}, State}
-            	end;
-            {error, no_such_user} ->
-                {{error, no_such_user}, State};
-            {error, too_many_users} ->
-                lager:error("too many users with username ~p password ~p", [UserName, PassWord]),
-                {{error, unexpected_error}, State};
-            {error, Reason} ->
-                lager:error("login failed with username ~p password ~p by unexpected reason: ~p", 
-                            [UserName, PassWord, Reason]),
-                {{error, unexpected_error}, State}
-        end,
-    {Reply, State};
+    case chatroom_manager:user_login(UserName, PassWord, self()) of
+        {ok, UId} ->
+            {ok, State#state{owner = UId,
+                             username = UserName}};
+        Err ->
+            {Err, State}
+    end;
 
-reply_action(logout, #state{owner = UId} = State) ->
-    lager:info("user ~p logout", [UId]),
-    Reply = {ok, ok},
-    {Reply, State};
+reply_action(logout, #state{owner = Owner} = State) when Owner =/= undefined->
+    Reply = chatroom_manager:user_logout(Owner),
+    {Reply, State#state{username = undefined, owner = undefined}};
 
 reply_action({register, UserName, PassWord}, #state{owner = undefined} = State) ->
-    Reply = 
-        case mysql_connection:add_user(UserName, PassWord) of
-            ok ->
-                {ok, ok};
-            {error, Reason} ->
-                {error, register_failed, Reason}
-        end,
+    Reply = chatroom_manager:register(UserName, PassWord),
     {Reply, State};
 
-reply_action({message, ToUId, Context}, State) ->
-    #state{friends = Friends} = State,
-    Reply = 
-        case sets:is_element(ToUId, Friends) of
-            true ->
-                Message = #message{to_uid = ToUId,
-                                   from_uid = self(),
-                                   context = Context},
-                message_passageway:send_message(Message),
-                {ok, ok};
-            false ->
-                {send_failed, not_friend}
-        end,
+reply_action(get_users, #state{owner = Owner} = State) when Owner =/= undefined ->
+    Reply = chatroom_manager:get_users(),
     {Reply, State};
+
+reply_action(get_online_users, #state{owner = Owner} = State) when Owner =/= undefined ->
+    Reply = chatroom_manager:get_online_users(),
+    {Reply, State};
+
+reply_action({message, ToUId, Context}, #state{owner = Owner} = State) when Owner =/= undefined->
+    Message = #message{to_uid = ToUId, from_uid = Owner, context = Context},
+    message_passageway:send_message(Message),
+    {ok, State};
 
 reply_action(_, State) ->
     {{error, invalid_packet}, State}.
+
+
+
+
+decode_packet(Bin) ->
+    erlang:binary_to_term(Bin).
+
+encode_packet(Term) ->
+    erlang:term_to_binary(Term).
