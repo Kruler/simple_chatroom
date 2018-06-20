@@ -125,7 +125,8 @@ start_link() ->
 %%--------------------------------------------------------------------
 init([]) ->
     erlang:process_flag(trap_exit, true),
-    ets:new(?USER_TAB, [set, named_table, public]),
+    Pos = #user.uid,
+    ets:new(?USER_TAB, [set, named_table, public, {keypos, Pos}]),
     {ok, #state{}}.
 
 %%--------------------------------------------------------------------
