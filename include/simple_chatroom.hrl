@@ -5,7 +5,7 @@
 -define(MESSAGE_TAB, message_tab).
 -define(USER_TAB, user_tab).
 
--define(ONELINE, 0).
+-define(ONLINE, 0).
 -define(OFFLINE, 1).
 
 

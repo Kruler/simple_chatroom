@@ -39,18 +39,22 @@
 user_login(UserName, PassWord, PId) ->
     case check_user(UserName) of
         {ok, #user{password = PassWord,
-                   status = ?OFFLINE} = User} ->
-            ets:insert(?USER_TAB, User#user{status = ?ONELINE,
+                   status = ?OFFLINE,
+                   uid = UId} = User} ->
+            gen_server:call(?SERVER, {link, PId}),
+            ets:insert(?USER_TAB, User#user{status = ?ONLINE,
                                             link_pid = PId}),
-            gen_server:call(?SERVER, {link, PId});
+            {ok, UId};
         {ok, #user{password = PassWord,
-                   status = ?ONELINE,
-                   link_pid = OldPId} = User} ->
+                   status = ?ONLINE,
+                   link_pid = OldPId,
+                   uid = UId} = User} ->
             gen_server:call(?SERVER, {unlink, OldPId}),
             chat_session:stop(OldPId),
-            ets:insert(?USER_TAB, User#user{status = ?ONELINE,
+            gen_server:call(?SERVER, {link, PId}),
+            ets:insert(?USER_TAB, User#user{status = ?ONLINE,
                                             link_pid = PId}),
-            gen_server:call(?SERVER, {link, PId});           
+            {ok, UId};           
         {ok, #user{}} ->
             {error, password_err};
         {error, Reason} ->
@@ -59,7 +63,7 @@ user_login(UserName, PassWord, PId) ->
 
 user_logout(UId) ->
     case ets:lookup(?USER_TAB, UId) of
-        [#user{status = ?ONELINE, 
+        [#user{status = ?ONLINE, 
                link_pid = Pid} = User] ->
             gen_server:call(?SERVER, {unlink, Pid}),
             ets:insert(?USER_TAB, User#user{status = ?OFFLINE, 
@@ -96,7 +100,7 @@ get_users() ->
               ets:tab2list(?USER_TAB)).
 
 get_online_user() ->
-    lists:filter(fun({_, _, Status}) -> Status =:= ?ONELINE end, get_users()).
+    lists:filter(fun({_, _, Status}) -> Status =:= ?ONLINE end, get_users()).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server

@@ -120,9 +120,10 @@ handle_cast({set_maxqlen, Len}, State) ->
 handle_cast(#message{to_uid = ToUId} = Message, State) ->
 	#state{max_queue_len = MaxMessageLen} = State,
 	case ets:lookup(?USER_TAB, ToUId) of
-		[{ToUId, Pid}] ->
+		[#user{status = ?ONLINE,
+			   link_pid = Pid}] ->
 			Pid ! Message;
-		[] ->
+		[#user{}] ->
 			case ets:lookup(?MESSAGE_TAB, ToUId) of
 				[{ToUId, MessageQ}] when length(MessageQ) >= MaxMessageLen->
 					{_, NMessageQ0} = queue:out(MessageQ),
@@ -138,6 +139,8 @@ handle_cast(#message{to_uid = ToUId} = Message, State) ->
 				{error, Reason} ->
 					lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?MESSAGE_TAB, Reason])
 			end;
+		[] ->
+			lager:warning("no such user with uid ~p", [ToUId]);
 		{error, Reason} ->
 			lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?USER_TAB, Reason])
 	end,

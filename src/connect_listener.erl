@@ -16,7 +16,7 @@
 %%% API
 %%%===================================================================
 start_link(Port) ->
-    case gen_tcp:listen(Port, [binary, {packet, raw}, {active, once}]) of
+    case gen_tcp:listen(Port, [binary, {packet, raw}, {active, once}, {reuseaddr, true}]) of
     	{ok, LSocket} ->
     		Pid = spawn_link(fun() -> loop(LSocket) end),
     		{ok, Pid};

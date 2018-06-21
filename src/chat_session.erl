@@ -127,9 +127,11 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
     Req = decode_packet(Bin),
+    lager:info("receive req ~p", [Req]),
     {Reply, NState} = reply_action(Req, State),
     Packet = encode_packet(Reply),
     gen_tcp:send(Socket, Packet),
+    inet:setopts(Socket, [{active, once}]),
     {noreply, NState};
 
 handle_info(Message, #state{socket = Socket} = State) ->
@@ -173,35 +175,35 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_action({login, UserName, PassWord}, State) ->
+reply_action({login = Type, UserName, PassWord}, State) ->
     case chatroom_manager:user_login(UserName, PassWord, self()) of
         {ok, UId} ->
-            {ok, State#state{owner = UId,
+            {{Type, {ok, UId}}, State#state{owner = UId,
                              username = UserName}};
         Err ->
-            {Err, State}
+            {{Type, Err}, State}
     end;
 
-reply_action(logout, #state{owner = Owner} = State) when Owner =/= undefined->
+reply_action(logout = Type, #state{owner = Owner} = State) when Owner =/= undefined->
     Reply = chatroom_manager:user_logout(Owner),
-    {Reply, State#state{username = undefined, owner = undefined}};
+    {{Type, Reply}, State#state{username = undefined, owner = undefined}};
 
-reply_action({register, UserName, PassWord}, #state{owner = undefined} = State) ->
+reply_action({register = Type, UserName, PassWord}, #state{owner = undefined} = State) ->
     Reply = chatroom_manager:register(UserName, PassWord),
-    {Reply, State};
+    {{Type, Reply}, State};
 
-reply_action(get_users, #state{owner = Owner} = State) when Owner =/= undefined ->
+reply_action(get_users = Type, #state{owner = Owner} = State) when Owner =/= undefined ->
     Reply = chatroom_manager:get_users(),
-    {Reply, State};
+    {{Type, Reply}, State};
 
-reply_action(get_online_users, #state{owner = Owner} = State) when Owner =/= undefined ->
+reply_action(get_online_users = Type, #state{owner = Owner} = State) when Owner =/= undefined ->
     Reply = chatroom_manager:get_online_users(),
-    {Reply, State};
+    {{Type, Reply}, State};
 
-reply_action({message, ToUId, Context}, #state{owner = Owner} = State) when Owner =/= undefined->
+reply_action({message = Type, ToUId, Context}, #state{owner = Owner} = State) when Owner =/= undefined->
     Message = #message{to_uid = ToUId, from_uid = Owner, context = Context},
     message_passageway:send_message(Message),
-    {ok, State};
+    {{Type, ok}, State};
 
 reply_action(_, State) ->
     {{error, invalid_packet}, State}.
