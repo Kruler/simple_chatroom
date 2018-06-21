@@ -146,6 +146,17 @@ handle_cast(#message{to_uid = ToUId} = Message, State) ->
 	end,
 	{noreply, State};
 
+handle_cast({login, UId, Pid}, State) ->
+	case ets:lookup(?MESSAGE_TAB, UId) of
+		[{UId, MessageQ}] ->
+			lists:foreach(fun(Message) -> Pid ! Message end, queue:to_list(MessageQ));
+		[] ->
+			ignore;
+		{error, Reason} ->
+			lager:error("find ~p's message in ~p failed :~p", [UId, ?MESSAGE_TAB, Reason])
+	end,
+	{noreply, State};
+
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
     {noreply, State}.

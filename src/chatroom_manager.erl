@@ -44,6 +44,7 @@ user_login(UserName, PassWord, PId) ->
             gen_server:call(?SERVER, {link, PId}),
             ets:insert(?USER_TAB, User#user{status = ?ONLINE,
                                             link_pid = PId}),
+            gen_server:cast(message_passageway, {login, UId, PId}),
             {ok, UId};
         {ok, #user{password = PassWord,
                    status = ?ONLINE,
