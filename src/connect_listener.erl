@@ -9,14 +9,14 @@
 -module(connect_listener).
 
 %% API
--export([start_link/1,
-	     loop/1]).
+-export([start_link/1]).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+-spec start_link(integer()) -> {ok, pid()} | {error, term()}.
 start_link(Port) ->
-    case gen_tcp:listen(Port, [binary, {packet, raw}, {active, once}, {reuseaddr, true}]) of
+    case gen_tcp:listen(Port, [binary, {active, once}, {reuseaddr, true}]) of
     	{ok, LSocket} ->
     		Pid = spawn_link(fun() -> loop(LSocket) end),
     		{ok, Pid};
@@ -24,7 +24,9 @@ start_link(Port) ->
     		{error, Reason}
     end.
 
-
+%%====================================================================
+%% Internal functions
+%%====================================================================
 loop(LSocket) ->
 	case gen_tcp:accept(LSocket) of
 		{ok, Socket} ->

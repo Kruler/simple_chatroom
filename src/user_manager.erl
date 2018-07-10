@@ -4,20 +4,17 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  2018-06-15 09:16:13
+%%% Created :  2018-06-15 09:27:39
 %%%-------------------------------------------------------------------
--module(message_passageway).
+-module(user_manager).
 
 -behaviour(gen_server).
 
 %% API
--export([send_message/1,
-		 keep_message_len/1,
-		 clear_cache/0,
-		 clear_cache/1]).
+-export([get_online_users/0,
+         force_logout/1]).
 
-
--export([start_link/1]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -31,29 +28,19 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {max_queue_len}).
+-record(state, {}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-send_message(#message{} = Message) ->
-	gen_server:cast(?MODULE, Message).
+-spec get_online_users() -> list().
+get_online_users() ->
+    gen_server:call(?SERVER, get_online_users).
 
-keep_message_len(UId) ->
-	case ets:lookup(?MESSAGE_TAB, UId) of
-		[{UId, Messages}] ->
-			length(Messages);
-		[] ->
-			0;
-		{error, Reason} ->
-			{error, Reason}
-	end.
+-spec force_logout(integer()) -> ok | {error, term()}.
+force_logout(UId) ->
+    logout(UId).
 
-clear_cache(UId) ->
-	ets:delete(?MESSAGE_TAB, UId).
-
-clear_cache() ->
-	ets:delete(?MESSAGE_TAB).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -61,8 +48,8 @@ clear_cache() ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(MaxMessageLen) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [MaxMessageLen], []).
+start_link() ->
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 
 %%%===================================================================
@@ -80,9 +67,9 @@ start_link(MaxMessageLen) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([MaxMessageLen]) ->
-	ets:new(?MESSAGE_TAB, [set, named_table, public]),
-    {ok, #state{max_queue_len = MaxMessageLen}}.
+init([]) ->
+    ets:new(?LOGIN_USERS, [set, named_table, public]),
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -98,6 +85,9 @@ init([MaxMessageLen]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(get_online_users, _From, State) ->
+    Reply = lists:map(fun({UId, _}) -> UId end, ets:tab2list(?LOGIN_USERS)),
+    {reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
     Reply = ok,
@@ -114,48 +104,64 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({set_maxqlen, Len}, State) ->
-	{noreply, State#state{max_queue_len = Len}};
+handle_cast({?LOGIN = Code, ReqId, UserName, PassWord, Socket}, State) ->
+    F = fun() ->
+            case chatroom_util:mnesia_query(user, [{username, UserName}, 
+                                                   {password, PassWord}]) of
+                {ok, [#user{uid = UId, 
+                            friends = Friends} = User]} ->
+                    mnesia:write(User#user{status = ?ONLINE}),
+                    [{Socket, Pid}] = ets:lookup(?SOCKET_TAB, Socket),
+                    case ets:lookup(?LOGIN_USERS, UId) of
+                        [{UId, PrePId}] ->
+                            chatroom_util:encode_and_reply(?LOGOUT, 0, {error, <<"somone force login your account"/utf8>>, Socket}),
+                            gen_server:cast(PrePId, logout);
+                        [] ->
+                            ok;                          
+                        {error, Reason} ->
+                            mnesia:abort(Reason)
+                    end,
+                    ets:insert(?LOGIN_USERS, {UId, Pid}),
+                    gen_server:cast(Pid, {login, UId}),
+                    gen_server:cast(message_router, {login, UId, Pid}),
+                    [UId, Friends];
+                {ok, []} ->
+                    {error, no_such_user};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+        end,
+    Reply = chatroom_util:mnesia_return(mnesia:transaction(F)),
+    chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
+    {noreply, State};
 
-handle_cast(#message{to_uid = ToUId} = Message, State) ->
-	#state{max_queue_len = MaxMessageLen} = State,
-	case ets:lookup(?USER_TAB, ToUId) of
-		[#user{status = ?ONLINE,
-			   link_pid = Pid}] ->
-			Pid ! Message;
-		[#user{}] ->
-			case ets:lookup(?MESSAGE_TAB, ToUId) of
-				[{ToUId, MessageQ}] when length(MessageQ) >= MaxMessageLen->
-					{_, NMessageQ0} = queue:out(MessageQ),
-					NMessageQ1 = queue:in(Message, NMessageQ0),
-					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ1});
-				[{ToUId, MessageQ}] ->
-					NMessageQ = queue:in(Message, MessageQ),
-					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ});					
-				[] ->
-					MessageQ = queue:new(),
-					NMessageQ = queue:in(Message, MessageQ),
-					ets:insert(?MESSAGE_TAB, {ToUId, NMessageQ});
-				{error, Reason} ->
-					lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?MESSAGE_TAB, Reason])
-			end;
-		[] ->
-			lager:warning("no such user with uid ~p", [ToUId]);
-		{error, Reason} ->
-			lager:error("lookup uid ~p in ~p failed: ~p", [ToUId, ?USER_TAB, Reason])
-	end,
-	{noreply, State};
+handle_cast({?LOGOUT = Code, ReqId, UId, Socket}, State) ->
+    Reply = logout(UId),
+    chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
+    {noreply, State};
 
-handle_cast({login, UId, Pid}, State) ->
-	case ets:lookup(?MESSAGE_TAB, UId) of
-		[{UId, MessageQ}] ->
-			lists:foreach(fun(Message) -> Pid ! Message end, queue:to_list(MessageQ));
-		[] ->
-			ignore;
-		{error, Reason} ->
-			lager:error("find ~p's message in ~p failed :~p", [UId, ?MESSAGE_TAB, Reason])
-	end,
-	{noreply, State};
+handle_cast({logout, UId}, State) ->
+    logout(UId),
+    {noreply, State};
+
+handle_cast({?REGISTER = Code, ReqId, UserName, PassWord, Socket}, State) ->
+    F = fun() -> 
+            case chatroom_util:mnesia_query(user, [{username, UserName}]) of
+                {ok, [User]} ->
+                    {error, already_exists};
+                {ok, []} ->
+                    UId = mnesia:dirty_update_counter(id_count, user, 1),
+                    mnesia:write(#user{uid = UId, 
+                                       username = UserName,
+                                       password = PassWord}),
+                    [UId];
+                {error, Reason} ->
+                    {error, Reason}
+            end
+        end,
+    Reply = chatroom_util:mnesia_return(mnesia:transaction(F)),
+    chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
+    {noreply, State};
 
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
@@ -204,3 +210,24 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+logout(UId) ->
+    F = fun() -> 
+            case chatroom_util:mnesia_query(user, [{uid, UId}]) of
+                {ok, [User]} ->
+                    mnesia:write(User#user{status = ?OFFLINE}),
+                    case ets:lookup(?LOGIN_USERS, UId) of
+                        [{UId, Pid}] ->
+                            gen_server:cast(Pid, logout),
+                            ets:delete(?LOGIN_USERS, UId);
+                        [] ->
+                            ok;
+                        {error, Reason} ->
+                            mnesia:abort(Reason)
+                    end;
+                {ok, []} ->
+                    {error, no_such_user};
+                {error, Reason} ->
+                    {error, Reason}
+            end
+        end,
+    chatroom_util:mnesia_return(mnesia:transaction(F)).

@@ -22,6 +22,9 @@
 %%====================================================================
 %% API functions
 %%====================================================================
+-spec start_supervisor(atom(), atom(), list()) -> {ok, pid()} | ignore | {error, term()}.
+start_supervisor(Mod, SupName, Args) ->
+	supervisor:start_link({local, SupName}, Mod, [SupName|Args]).
 
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -32,17 +35,18 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
+	ets:new(?SOCKET_TAB, [set, named_table, public]),
 	Port = application:get_env(?APP, port, 7000),
 	MaxMLen = application:get_env(?APP, max_message_len, 10),
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),
 	ConnectListener = child_worker_spec(connect_listener, [Port]),
-	ChatroomManager = child_worker_spec(chatroom_manager, []),
-	MessagePWay = child_worker_spec(message_passageway, [MaxMLen]),
+	UserManager = child_worker_spec(user_manager, []),
+	MessageRouter = child_worker_spec(message_router, [MaxMLen]),
 	
 	supervisor_spec(one_for_one, [ChatSessionSup,
 								  ConnectListener,
-								  ChatroomManager,
-								  MessagePWay
+								  UserManager,
+								  MessageRouter
 								  ]);
 
 init([chat_session_sup]) ->
@@ -64,6 +68,3 @@ child_worker_spec(Mod, Args) when is_list(Args) ->
 child_supervisor_spec(Mod, SupName, Args) when is_list(Args) ->
 	{Mod, {?MODULE, start_supervisor, [Mod, SupName, Args]}, 
 		  transient, ?SHUTDOWN, supervisor, [Mod]}.
-
-start_supervisor(Mod, SupName, Args) ->
-	supervisor:start_link({local, SupName}, Mod, [SupName|Args]).

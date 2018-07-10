@@ -29,12 +29,13 @@
 -include("simple_chatroom.hrl").
 
 -record(state, {socket,
-                owner,
+                uid,
                 username}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+-spec start(port()) -> {ok, pid()} | {error, term()}.
 start(Socket) ->
     case supervisor:start_child(chat_session_sup, [Socket]) of
         {ok, Pid} ->
@@ -47,6 +48,7 @@ start(Socket) ->
             {error, Reason}
     end.
 
+-spec stop(pid()) -> ok.
 stop(Pid) ->
     gen_server:cast(Pid, stop).
 %%--------------------------------------------------------------------
@@ -76,6 +78,7 @@ start_link(Socket) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Socket]) ->
+    ets:insert(?SOCKET_TAB, {Socket, self()}),
     {ok, #state{socket = Socket}}.
 
 %%--------------------------------------------------------------------
@@ -108,7 +111,18 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast(stop, State) ->
+handle_cast({login, UId}, State) ->
+    {noreply, State#state{uid = UId}};
+
+handle_cast(logout, State) ->
+    {noreply, State#state{uid = undefined}};
+
+handle_cast({reply, Packet}, #state{socket = Socket} = State) ->
+    gen_tcp:send(Socket, Packet),
+    {noreply, State};
+
+handle_cast(stop, #state{uid = UId} = State) ->
+    user_manager:logout(UId),
     {stop, normql, State};
 
 handle_cast(_Msg, State) ->
@@ -126,20 +140,14 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    Req = decode_packet(Bin),
-    lager:info("receive req ~p", [Req]),
-    {Reply, NState} = reply_action(Req, State),
-    Packet = encode_packet(Reply),
-    gen_tcp:send(Socket, Packet),
+    lager:info("receive packet ~p", [Bin]),
+    chatroom_util:decode_packet(Bin, Socket),
     inet:setopts(Socket, [{active, once}]),
-    {noreply, NState};
-
-handle_info(Message, #state{socket = Socket} = State) ->
-    Packet = encode_packet(Message),
-    gen_tcp:send(Socket, Packet),
     {noreply, State};
 
 handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
+    #state{uid = UId} = State,
+    gen_server:cast(user_manager, {logout, UId}),
     {stop, normal, State};
 
 handle_info(_Info, State) ->
@@ -158,7 +166,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{socket = Socket} = State) ->
+    ets:delete(?SOCKET_TAB, Socket),
     ok.
 
 %%--------------------------------------------------------------------
@@ -175,44 +184,3 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_action({login = Type, UserName, PassWord}, State) ->
-    case chatroom_manager:user_login(UserName, PassWord, self()) of
-        {ok, UId} ->
-            {{Type, {ok, UId}}, State#state{owner = UId,
-                             username = UserName}};
-        Err ->
-            {{Type, Err}, State}
-    end;
-
-reply_action(logout = Type, #state{owner = Owner} = State) when Owner =/= undefined->
-    Reply = chatroom_manager:user_logout(Owner),
-    {{Type, Reply}, State#state{username = undefined, owner = undefined}};
-
-reply_action({register = Type, UserName, PassWord}, #state{owner = undefined} = State) ->
-    Reply = chatroom_manager:register(UserName, PassWord),
-    {{Type, Reply}, State};
-
-reply_action(get_users = Type, #state{owner = Owner} = State) when Owner =/= undefined ->
-    Reply = chatroom_manager:get_users(),
-    {{Type, Reply}, State};
-
-reply_action(get_online_users = Type, #state{owner = Owner} = State) when Owner =/= undefined ->
-    Reply = chatroom_manager:get_online_users(),
-    {{Type, Reply}, State};
-
-reply_action({message = Type, ToUId, Context}, #state{owner = Owner} = State) when Owner =/= undefined->
-    Message = #message{to_uid = ToUId, from_uid = Owner, context = Context},
-    message_passageway:send_message(Message),
-    {{Type, ok}, State};
-
-reply_action(_, State) ->
-    {{error, invalid_packet}, State}.
-
-
-
-
-decode_packet(Bin) ->
-    erlang:binary_to_term(Bin).
-
-encode_packet(Term) ->
-    erlang:term_to_binary(Term).
