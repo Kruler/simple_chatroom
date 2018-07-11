@@ -12,6 +12,7 @@
 
 %% API
 -export([send_message/3,
+		 send_notify/3,
 		 keep_message_len/1,
 		 clear_cache/0,
 		 clear_cache/1]).
@@ -42,6 +43,13 @@ send_message(From, To, Context) ->
 					   to_uid = To,
 					   context = Context},
 	gen_server:cast(?MODULE, Message).
+
+-spec send_notify(integer(), integer(), list()) -> ok.
+send_notify(To, Code, Payload) ->
+	Notify = #notify{to_uid = To,
+					 type = Code,
+					 payload = Payload},
+	gen_server:cast(?MODULE, Notify).
 
 -spec keep_message_len(integer()) -> integer() | {error, term()}.
 keep_message_len(UId) ->
@@ -89,6 +97,8 @@ start_link(MaxMessageLen) ->
 %%--------------------------------------------------------------------
 init([MaxMessageLen]) ->
 	ets:new(?MESSAGE_TAB, [set, named_table, public]),
+	ets:new(?NOTIFY_TAB, [set, named_table, public]),
+	self() ! load_message,
     {ok, #state{max_queue_len = MaxMessageLen}}.
 
 %%--------------------------------------------------------------------
@@ -153,14 +163,58 @@ handle_cast(#message{to_uid = ToUId} = Message, State) ->
 	end,
 	{noreply, State};
 
+handle_cast(#notify{to_uid = UId} = Notify, State) ->
+	case ets:lookup(?LOGIN_USERS, UId) of
+		[{UId, Pid}] ->
+			#notify{type = Type,
+					payload = Payload} = Notify,
+			Packet = chatroom_util:encode_packet(Type, 0, Payload),
+			gen_server:cast(Pid, {reply, Packet});
+		[] ->
+			case ets:lookup(?NOTIFY_TAB, UId) of
+				[{UId, NotifyQ}] ->
+					NNotifyQ = queue:in(Notify, NotifyQ),
+					ets:insert(?NOTIFY_TAB, {UId, NNotifyQ});					
+				[] ->
+					NotifyQ = queue:new(),
+					NNotifyQ = queue:in(Notify, NotifyQ),
+					ets:insert(?NOTIFY_TAB, {UId, NNotifyQ});
+				{error, Reason} ->
+					lager:error("lookup uid ~p in ~p failed: ~p", [UId, ?NOTIFY_TAB, Reason])
+			end;
+		{error, Reason} ->
+			lager:error("lookup uid ~p in ~p failed: ~p", [UId, ?LOGIN_USERS, Reason])
+	end,
+	{noreply, State};
+
 handle_cast({login, UId, Pid}, State) ->
 	case ets:lookup(?MESSAGE_TAB, UId) of
 		[{UId, MessageQ}] ->
-			lists:foreach(fun(Message) -> Pid ! Message end, queue:to_list(MessageQ));
+			lists:foreach(
+				fun(#message{from_uid = FromUId, 
+					 		 to_uid = ToUId,
+					 		 context = Context}) -> 
+					Packet = chatroom_util:encode_packet(?PUSH_MESSAGE, 0, [FromUId, ToUId, Context]),
+					gen_server:cast(Pid, {reply, Packet})
+			end, queue:to_list(MessageQ));
 		[] ->
 			ignore;
-		{error, Reason} ->
-			lager:error("find ~p's message in ~p failed :~p", [UId, ?MESSAGE_TAB, Reason])
+		{error, Reason0} ->
+			lager:error("find ~p's message in ~p failed :~p", [UId, ?MESSAGE_TAB, Reason0])
+	end,
+	case ets:lookup(?NOTIFY_TAB, UId) of
+		[{UId, NotifyQ}] ->
+			lists:foreach(
+				fun(#notify{to_uid = UId,
+							type = Type,
+							payload = Payload}) ->
+					Packet = chatroom_util:encode_packet(Type, 0, Payload),
+					gen_server:cast(Pid, {reply, Packet})
+			end, queue:to_list(NotifyQ));
+		[] ->
+			ignore;
+		{error, Reason1} ->
+			lager:error("find ~p's notify in ~p failed :~p", [UId, ?NOTIFY_TAB, Reason1])
 	end,
 	{noreply, State};
 
@@ -178,11 +232,38 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info(load_message, #state{max_queue_len = MaxQLen} = State) ->
+	case chatroom_util:mnesia_query(messages, []) of
+		{ok, Messages} ->
+			lists:foreach(
+				fun(#messages{uid = UId, messages = UMessages}) ->
+					UMessagesFilter = filter_message(UMessages, MaxQLen),
+					ets:insert({UId, queue:from_list(UMessagesFilter)})
+			end, Messages),
+			mnesia:clear_table(messages);
+		{error, Reason} ->
+			lager:error("load messages failed: ~p", [Reason])
+	end,
+	{noreply, State};
+
+handle_info(load_notify, State) ->
+	case chatroom_util:mnesia_query(notifys, []) of
+		{ok, Notifys} ->
+			lists:foreach(
+				fun(#notifys{uid = UId, notifys = UNotifys}) ->
+					ets:insert({UId, queue:from_list(UNotifys)})
+			end, Notifys),
+			mnesia:clear_table(notifys);
+		{error, Reason} ->
+			lager:error("load notifys failed: ~p", [Reason])
+	end,
+	{noreply, State};
+
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.
 
-
+ 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -195,6 +276,26 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 terminate(_Reason, _State) ->
+	F = fun() ->
+			ets:foldl(
+				fun({UId, MessageQ}, _) ->
+				Messages = queue:to_list(MessageQ),
+				mnesia:write(#messages{uid = UId, messages = Messages}),
+				ok
+			end, ok, ?MESSAGE_TAB),
+			ets:foldl(
+				fun({UId, NotifyQ}, _) ->
+				Notifys = queue:to_list(NotifyQ),
+				mnesia:write(#notifys{uid = UId, notifys = Notifys}),
+				ok
+			end, ok, ?NOTIFY_TAB)
+		end,
+	case chatroom_util:mnesia_return(F) of
+		{ok, ok} ->
+			ok;
+		{error, Reason} ->
+			lager:error("write messages into mnesia failed: ~p", [Reason])
+	end,
     ok.
 
 %%--------------------------------------------------------------------
@@ -211,3 +312,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+filter_message(UMessages, MaxQLen) ->
+	filter_message(lists:reverse(UMessages), [], MaxQLen).
+
+filter_message([], NMessages, _MaxQLen) ->
+	NMessages;
+filter_message(Messages, NMessages, MaxQLen) when length(NMessages) =< MaxQLen->
+	NMessages;
+filter_message([Message|T], NMessages, MaxQLen) ->
+	filter_message(T, [Message|NMessages], MaxQLen).

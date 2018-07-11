@@ -163,6 +163,19 @@ handle_cast({?REGISTER = Code, ReqId, UserName, PassWord, Socket}, State) ->
     chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
     {noreply, State};
 
+handle_cast({?USERINFO = Code, ReqId, UId, Socket}, State) ->
+    Reply = 
+        case mnesia:dirty_read(user, UId) of
+            [] ->
+                {error, no_such_user};
+            [#user{username = UserName}] ->
+                {ok, [UserName]};
+            {aborted, Reason} ->
+                {error, Reason}
+        end,
+    chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
+    {noreply, State};
+
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
     {noreply, State}.

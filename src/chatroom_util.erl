@@ -57,6 +57,11 @@ handle_req(?REGISTER, ReqId, [UserName, PassWord], Socket) ->
     gen_server:cast(user_manager, {?REGISTER, ReqId, UserName, PassWord, Socket});
 handle_req(?MESSAGE, _ReqId, [FromUId, ToUId, Context], _Socket) ->
     message_router:send_message(FromUId, ToUId, Context);
+handle_req(?USERINFO, ReqId, [UId], Socket) ->
+    gen_server:cast(user_manager, {?USERINFO, ReqId, UId, Socket});
+handle_req(?ADD_FRIEND, ReqId, [FromUId, ToUId], Socket) ->
+    message_router:send_notify(ToUId, ?FRIENDREQ, [FromUId]),
+    encode_and_reply(?ADD_FRIEND, ReqId, [?RESP_OK, <<"send request success">>], Socket);
 handle_req(_, _, _, Socket) ->
     reply(invalid_packet(), Socket).
 
@@ -77,7 +82,7 @@ reply(Packet, Socket) ->
     end.
 
 invalid_packet() ->
-    jsx:decode([{<<"code">>, ?RESP_ERR}, {message, <<"非法请求"/utf8>>}]).
+    jsx:encode([{<<"code">>, ?RESP_ERR}, {message, <<"非法请求"/utf8>>}]).
 
 
 mnesia_query(Tab, Limit) ->

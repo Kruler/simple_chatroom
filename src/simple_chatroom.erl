@@ -28,6 +28,8 @@ init() ->
 											   {attributes, record_info(fields, user)}]),
 					mnesia:create_table(messages, [{disc_copies, [node()]},
 											       {attributes, record_info(fields, messages)}]),
+					mnesia:create_table(notifys, [{disc_copies, [node()]},
+											      {attributes, record_info(fields, notifys)}]),
 					mnesia:create_table(id_count, [{disc_copies, [node()]},
 											       {attributes, record_info(fields, id_count)}]),
 					chatroom_util:mnesia_insert(#id_count{table = user, count = 10000});
