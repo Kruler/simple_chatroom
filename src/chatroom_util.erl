@@ -9,6 +9,7 @@
 -module(chatroom_util).
 
 -include("simple_chatroom.hrl").
+-include("error_ret.hrl").
 
 -compile(export_all).
 
@@ -36,7 +37,15 @@ encode_packet(Code, ReqId, {ok, Ret}) ->
 encode_packet(Code, ReqId, ok) ->
     encode_packet(Code, ReqId, [?RESP_OK]);
 encode_packet(Code, ReqId, {error, Reason}) ->
-    encode_packet(Code, ReqId, [{?RESP_ERR, Reason}]).
+    NReason = 
+        case proplists:get_value(Reason, ?ERROR_RET) of
+            undefined ->
+                lager:warning("can't handle error return ~p", [Reason]), 
+                <<"未知错误"/utf8>>;
+            R ->
+                R
+        end,
+    encode_packet(Code, ReqId, [{?RESP_ERR, NReason}]).
 
 handle_req(Req, Socket) ->
     Code = proplists:get_value(<<"code">>, Req),
@@ -60,8 +69,12 @@ handle_req(?MESSAGE, _ReqId, [FromUId, ToUId, Context], _Socket) ->
 handle_req(?USERINFO, ReqId, [UId], Socket) ->
     gen_server:cast(user_manager, {?USERINFO, ReqId, UId, Socket});
 handle_req(?ADD_FRIEND, ReqId, [FromUId, ToUId], Socket) ->
-    message_router:send_notify(ToUId, ?FRIENDREQ, [FromUId]),
+    message_router:send_notify(ToUId, ?FRIEND_REQ, [FromUId]),
     encode_and_reply(?ADD_FRIEND, ReqId, [?RESP_OK, <<"send request success">>], Socket);
+handle_req(?FRIEND_RESP, ReqId, [Resp, UId, ReqUId] = Payload, Socket) ->
+    gen_server:cast(user_manager, {?FRIEND_RESP, ReqId, Payload, Socket});
+handle_req(?SEARCH_USER, ReqId, UserName, Socket) ->
+    gen_server:cast(user_manager, {?SEARCH_USER, ReqId, UserName, Socket});
 handle_req(_, _, _, Socket) ->
     reply(invalid_packet(), Socket).
 
@@ -98,6 +111,10 @@ mnesia_query(Tab, Limit) ->
     Guard = [],
     Result = ['$_'],
     F = fun() -> mnesia:select(Tab, [{MatchHead, Guard, Result}]) end,
+    mnesia_return(mnesia:transaction(F)).
+
+mnesia_id_query(Tab, Id) ->
+    F = fun() -> mnesia:read(Tab, Id) end,
     mnesia_return(mnesia:transaction(F)).
 
 mnesia_insert(Rec) ->

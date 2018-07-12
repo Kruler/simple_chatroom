@@ -114,7 +114,7 @@ handle_cast({?LOGIN = Code, ReqId, UserName, PassWord, Socket}, State) ->
                     [{Socket, Pid}] = ets:lookup(?SOCKET_TAB, Socket),
                     case ets:lookup(?LOGIN_USERS, UId) of
                         [{UId, PrePId}] ->
-                            chatroom_util:encode_and_reply(?LOGOUT, 0, {error, <<"somone force login your account"/utf8>>, Socket}),
+                            chatroom_util:encode_and_reply(?LOGOUT, 0, {error, force_logined}, Socket),
                             gen_server:cast(PrePId, logout);
                         [] ->
                             ok;                          
@@ -126,7 +126,7 @@ handle_cast({?LOGIN = Code, ReqId, UserName, PassWord, Socket}, State) ->
                     gen_server:cast(message_router, {login, UId, Pid}),
                     [UId, Friends];
                 {ok, []} ->
-                    {error, no_such_user};
+                    {error, <<"username or password wrong">>};
                 {error, Reason} ->
                     {error, Reason}
             end
@@ -148,7 +148,7 @@ handle_cast({?REGISTER = Code, ReqId, UserName, PassWord, Socket}, State) ->
     F = fun() -> 
             case chatroom_util:mnesia_query(user, [{username, UserName}]) of
                 {ok, [User]} ->
-                    {error, already_exists};
+                    {error, user_already_exists};
                 {ok, []} ->
                     UId = mnesia:dirty_update_counter(id_count, user, 1),
                     mnesia:write(#user{uid = UId, 
@@ -168,12 +168,65 @@ handle_cast({?USERINFO = Code, ReqId, UId, Socket}, State) ->
         case mnesia:dirty_read(user, UId) of
             [] ->
                 {error, no_such_user};
-            [#user{username = UserName}] ->
-                {ok, [UserName]};
+            [#user{username = UserName, status = Status}] ->
+                {ok, [UserName, Status]};
             {aborted, Reason} ->
                 {error, Reason}
         end,
     chatroom_util:encode_and_reply(Code, ReqId, Reply, Socket),
+    {noreply, State};
+
+handle_cast({?FRIEND_RESP, ReqId, [Resp, UId, ReqId] = Payload, Socket}, State) ->
+    case Resp of
+        ?RESP_OK ->
+            case chatroom_util:mnesia_id_query(user, UId) of
+                {ok, [#user{friends = Friends1} = User1]} ->
+                    case chatroom_util:mnesia_id_query(user, ReqId) of
+                        {ok, [#user{friends = Friends2} = User2]} ->
+                            F = fun() ->
+                                    mnesia:write(User1#user{friends = [ReqId|Friends1]}),
+                                    mnesia:write(User2#user{friends = [UId|Friends2]})
+                                end,
+                            case chatroom_util:mnesia_return(mnesia:transaction(F)) of
+                                {ok, ok} ->
+                                    message_router:send_notify(ReqId, ?FRIEND_REP, Payload),
+                                    chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, ok, Socket); 
+                                {error, Reason} ->
+                                    lager:error("add friends failed: ~p", [Reason]),
+                                    chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, {error, Reason}, Socket)
+                            end; 
+                        {ok, _} ->
+                            chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, {error, no_such_user}, Socket);
+                        {error ,Reason} ->
+                            chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, {error, Reason}, Socket)
+                    end;
+                {ok, _} ->
+                    chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, {error, no_such_user}, Socket);
+                {error, Reason} ->
+                    lager:error("find user ~p failed: ~p", [UId, Reason]),
+                    chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, {error, Reason}, Socket)
+            end;         
+        ?RESP_ERR ->
+            message_router:send_notify(ReqId, ?FRIEND_REP, Payload),
+            chatroom_util:encode_and_reply(?FRIEND_RESP, ReqId, ok, Socket);
+        _ ->
+            chatroom_util:reply_invalid_packet(Socket)
+    end,
+    {noreply, State};
+
+handle_cast({?SEARCH_USER, ReqId, UserName, Socket}, State) ->
+    Reply = 
+        case chatroom_util:mnesia_query(user, [{username, UserName}]) of
+            {ok, [#user{uid = UId, 
+                        username = UserName,
+                        status = Status}]} ->
+                {ok, [UserName, UId, Status]};
+            {ok, []} ->
+                {error, no_such_user};
+            {error, Reason} ->
+                {error, Reason}
+        end,
+    chatroom_util:encode_and_reply(?SEARCH_USER, ReqId, Reply, Socket),
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -225,7 +278,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 logout(UId) ->
     F = fun() -> 
-            case chatroom_util:mnesia_query(user, [{uid, UId}]) of
+            case chatroom_util:mnesia_id_query(user, UId) of
                 {ok, [User]} ->
                     mnesia:write(User#user{status = ?OFFLINE}),
                     case ets:lookup(?LOGIN_USERS, UId) of

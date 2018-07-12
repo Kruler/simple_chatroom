@@ -11,14 +11,18 @@
 -define(LOGOUT, 10002).
 -define(REGISTER, 10003).
 -define(USERINFO, 10004).
+-define(FRIEND, 10005).
+-define(ADD_FRIEND, 10006).
+-define(FRIEND_RESP, 10007).
+-define(SEARCH_USER, 10008).
 
 -define(RESP_OK, 1000).
 -define(RESP_ERR, 1001).
 
 -define(MESSAGE, 999).
 -define(PUSH_MESSAGE, 998).
--define(ADD_FRIEND, 997).
--define(FRIENDREQ, 996).
+-define(FRIEND_REQ, 997).
+-define(FRIEND_REP, 996).
 
 -define(ONLINE, 0).
 -define(OFFLINE, 1).
@@ -47,3 +51,5 @@
 
 -record(id_count, {table,
 				   count = 0}).
+
+
