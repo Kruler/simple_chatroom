@@ -4,16 +4,13 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  2018-06-13 23:59:54
+%%% Created :  2018-07-16 16:51:34
 %%%-------------------------------------------------------------------
--module(chat_session).
+-module(group_handler).
 
 -behaviour(gen_server).
 
 %% API
--export([start/1,
-         stop/1]).
-
 -export([start_link/1]).
 
 %% gen_server callbacks
@@ -28,28 +25,17 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {socket,
-                uid}).
+-record(state, {group_id,
+				owner,
+				memebers,
+				managers}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec start(port()) -> {ok, pid()} | {error, term()}.
-start(Socket) ->
-    case supervisor:start_child(chat_session_sup, [Socket]) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {ok, Pid, _Info} ->
-            {ok, Pid};
-        {error, {already_started, Pid}} ->
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
--spec stop(pid()) -> ok.
-stop(Pid) ->
-    gen_server:cast(Pid, stop).
+group_chat(GroupId, UId, Context) ->
+	PName = chatroom_util:generate_pname(?MODULE, GroupId),
+	gen_server:cast(PName, {group_chat, UId, Context}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -57,8 +43,18 @@ stop(Pid) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Socket) ->
-    gen_server:start_link(?MODULE, [Socket], []).
+start() ->
+	case chatroom_util:mnesia_query(group, []) of
+		{ok, Groups} ->
+			lists:foreach(fun(Group) -> group_handler:start(Group) end, Groups);
+		{error, Reason} ->
+			lager:error("start group failed:~p", [Reason])
+	end.
+
+start(Group) ->
+	#group{id = GroupId} = Group,
+	PName = chatroom_util:generate_pname(?MODULE, GroupId),
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [GroupId], []).
 
 
 %%%===================================================================
@@ -76,9 +72,9 @@ start_link(Socket) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Socket]) ->
-    ets:insert(?SOCKET_TAB, {Socket, self()}),
-    {ok, #state{socket = Socket}}.
+init([Group]) ->
+
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -110,19 +106,13 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({login, UId}, State) ->
-    {noreply, State#state{uid = UId}};
-
-handle_cast(logout, State) ->
-    {noreply, State#state{uid = undefined}};
-
-handle_cast({reply, Packet}, #state{socket = Socket} = State) ->
-    gen_tcp:send(Socket, Packet),
-    {noreply, State};
-
-handle_cast(stop, #state{uid = UId} = State) ->
-    user_manager:logout(UId),
-    {stop, normql, State};
+handle_cast({group_chat, UId, Context}, State) ->
+	#state{memebers = Members} = State,
+	sets:foldl(
+		fun(Member, _) ->
+			message_router:send_message(UI)
+	end, ok, Members)
+	{noreply, State};
 
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
@@ -138,17 +128,6 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    lager:info("receive packet ~p", [Bin]),
-    chatroom_util:decode_packet(Bin, Socket),
-    inet:setopts(Socket, [{active, once}]),
-    {noreply, State};
-
-handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
-    #state{uid = UId} = State,
-    gen_server:cast(user_manager, {logout, UId}),
-    {stop, normal, State};
-
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.
@@ -165,8 +144,7 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{socket = Socket} = State) ->
-    ets:delete(?SOCKET_TAB, Socket),
+terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------

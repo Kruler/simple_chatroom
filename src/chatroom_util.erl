@@ -66,6 +66,8 @@ handle_req(?REGISTER, ReqId, [UserName, PassWord], Socket) ->
     gen_server:cast(user_manager, {?REGISTER, ReqId, UserName, PassWord, Socket});
 handle_req(?MESSAGE, _ReqId, [FromUId, ToUId, Context], _Socket) ->
     message_router:send_message(FromUId, ToUId, Context);
+handle_req(?BROADCAST_MESSAGE, _ReqId, [Context], _Socket) ->
+    message_router:broadcast(Context);
 handle_req(?USERINFO, ReqId, [UId], Socket) ->
     gen_server:cast(user_manager, {?USERINFO, ReqId, UId, Socket});
 handle_req(?ADD_FRIEND, ReqId, [FromUId, ToUId], Socket) ->
@@ -73,8 +75,34 @@ handle_req(?ADD_FRIEND, ReqId, [FromUId, ToUId], Socket) ->
     encode_and_reply(?ADD_FRIEND, ReqId, [?RESP_OK, <<"send request success">>], Socket);
 handle_req(?FRIEND_RESP, ReqId, [Resp, UId, ReqUId] = Payload, Socket) ->
     gen_server:cast(user_manager, {?FRIEND_RESP, ReqId, Payload, Socket});
-handle_req(?SEARCH_USER, ReqId, UserName, Socket) ->
+handle_req(?SEARCH_USER, ReqId, [UserName], Socket) ->
     gen_server:cast(user_manager, {?SEARCH_USER, ReqId, UserName, Socket});
+handle_req(?CREATE_GROUP, ReqId, [UId], Socket) ->
+    gen_server:cast(group_manager, {?CREATE_GROUP, ReqId, UId, Socket});
+handle_req(?DISSOLVE_GROUP, ReqId, [UId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?DISSOLVE_GROUP, ReqId, UId, GroupId, Socket});
+handle_req(?SET_MANAGER, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?SET_MANAGER, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?DELETE_MANAGER, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?DELETE_MANAGER, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?GROUP_CHAT, ReqId, [UId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?GROUP_CHAT, ReqId, UId, GroupId, Socket});
+handle_req(?FORBID_CHAT, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?FORBID_CHAT, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?FORBID_ALL, ReqId, [UId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?FORBID_ALL, ReqId, UId, GroupId, Socket});
+handle_req(?CANCEL_FORBID, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?CANCEL_FORBID, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?CANCEL_FORBID_ALL, ReqId, [UId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?CANCEL_FORBID_ALL, ReqId, UId, GroupId, Socket});
+handle_req(?KICK, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?KICK, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?INVITE, ReqId, [UId, InvitedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?INVITE, ReqId, UId, InvitedUId, GroupId, Socket});
+handle_req(?CHANGE_OWNER, ReqId, [UId, SetedUId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?CHANGE_OWNER, ReqId, UId, SetedUId, GroupId, Socket});
+handle_req(?REQ_ADD_GROUP, ReqId, [UId, GroupId], Socket) ->
+    gen_server:cast(group_manager, {?REQ_ADD_GROUP, ReqId, UId, GroupId, Socket});
 handle_req(_, _, _, Socket) ->
     reply(invalid_packet(), Socket).
 
@@ -130,3 +158,16 @@ mnesia_return(Return) ->
         {aborted, Reason} -> {error, Reason}
     end.
     
+
+generate_name(NameSpace, Id) when is_atom(NameSpace)->
+    generate_name(atom_to_list(NameSpace), Id);
+generate_name(NameSpace, Id) when is_binary(NameSpace) ->
+    generate_name(binary_to_list(NameSpace), Id);
+generate_name(NameSpace, Id) when is_integer(NameSpace) ->
+    generate_name(integer_to_list(NameSpace), Id);
+generate_name(NameSpace, Id) when is_float(NameSpace) ->
+    generate_name(float_to_integer(NameSpace), Id);
+generate_name(NameSpace, Id) when is_list(NameSpace)->
+    list_to_atom(NameSpace ++ "_" ++ integer_to_list(erlang:phash2(Data)));
+generate_name(_, _) ->
+    throw(badarg).

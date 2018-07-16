@@ -4,17 +4,14 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created :  2018-06-13 23:59:54
+%%% Created :  2018-07-16 13:26:28
 %%%-------------------------------------------------------------------
--module(chat_session).
+-module(group_manager).
 
 -behaviour(gen_server).
 
 %% API
--export([start/1,
-         stop/1]).
-
--export([start_link/1]).
+-export([start_link/0]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -28,28 +25,12 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {socket,
-                uid}).
+-record(state, {}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec start(port()) -> {ok, pid()} | {error, term()}.
-start(Socket) ->
-    case supervisor:start_child(chat_session_sup, [Socket]) of
-        {ok, Pid} ->
-            {ok, Pid};
-        {ok, Pid, _Info} ->
-            {ok, Pid};
-        {error, {already_started, Pid}} ->
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
-    end.
 
--spec stop(pid()) -> ok.
-stop(Pid) ->
-    gen_server:cast(Pid, stop).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -57,8 +38,9 @@ stop(Pid) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link(Socket) ->
-    gen_server:start_link(?MODULE, [Socket], []).
+start_link() ->
+
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 
 %%%===================================================================
@@ -76,9 +58,14 @@ start_link(Socket) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Socket]) ->
-    ets:insert(?SOCKET_TAB, {Socket, self()}),
-    {ok, #state{socket = Socket}}.
+init([]) ->
+	case mnesia:subscribe({table, group, simple}) of
+	    {ok, _} -> 
+	    	group_handler:start();
+	    {error, Reason1} ->
+	        lager:warning("subscribe exchange failed: ~p", [Reason1]),
+	        ignore
+	end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -110,20 +97,9 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_cast({login, UId}, State) ->
-    {noreply, State#state{uid = UId}};
+handle_cast({?DISSOLVE_GROUP, ReqId, UId, GroupId, Socket}, State) ->
 
-handle_cast(logout, State) ->
-    {noreply, State#state{uid = undefined}};
-
-handle_cast({reply, Packet}, #state{socket = Socket} = State) ->
-    gen_tcp:send(Socket, Packet),
-    {noreply, State};
-
-handle_cast(stop, #state{uid = UId} = State) ->
-    user_manager:logout(UId),
-    {stop, normql, State};
-
+	{noreply, State};
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
     {noreply, State}.
@@ -138,16 +114,17 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({tcp, Socket, Bin}, #state{socket = Socket} = State) ->
-    lager:info("receive packet ~p", [Bin]),
-    chatroom_util:decode_packet(Bin, Socket),
-    inet:setopts(Socket, [{active, once}]),
+handle_info({mnesia_table_event, {write, #group{} = _, _}}, 
+                                            #state{} = State)->
+    lager:info("start sync trading sessions"),
+    gen_server:cast(self(), load_init_data),
     {noreply, State};
 
-handle_info({tcp_closed, Socket}, #state{socket = Socket} = State) ->
-    #state{uid = UId} = State,
-    gen_server:cast(user_manager, {logout, UId}),
-    {stop, normal, State};
+handle_info({mnesia_table_event, {delete, {group, {_, _, _, _}}, _}}, 
+                                            #state{} = State)->
+    lager:info("start sync trdading sessions"),
+    gen_server:cast(self(), load_init_data),
+    {noreply, State};
 
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
@@ -165,8 +142,7 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, #state{socket = Socket} = State) ->
-    ets:delete(?SOCKET_TAB, Socket),
+terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------

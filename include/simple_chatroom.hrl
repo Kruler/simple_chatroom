@@ -16,13 +16,30 @@
 -define(FRIEND_RESP, 10007).
 -define(SEARCH_USER, 10008).
 
+
+-define(CREATE_GROUP, 11001).
+-define(DISSOLVE_GROUP, 11002).
+-define(SET_MANAGER, 11003).
+-define(DELETE_MANAGER, 11004).
+-define(GROUP_CHAT, 11005).
+-define(FORBID_CHAT, 11006).
+-define(FORBID_ALL, 11007).
+-define(CANCEL_FORBID, 11008).
+-define(CANCEL_FORBID_ALL, 11009).
+-define(KICK, 11010).
+-define(INVITE, 11011).
+-define(CHANGE_OWNER, 11012).
+-define(REQ_ADD_GROUP, 11013).
+
 -define(RESP_OK, 1000).
 -define(RESP_ERR, 1001).
 
 -define(MESSAGE, 999).
--define(PUSH_MESSAGE, 998).
--define(FRIEND_REQ, 997).
--define(FRIEND_REP, 996).
+-define(BROADCAST_MESSAGE, 998).
+-define(PUSH_MESSAGE, 997).
+-define(FRIEND_REQ, 996).
+-define(FRIEND_REP, 995).
+-define(REP_ADD_GROUP, 994).
 
 -define(ONLINE, 0).
 -define(OFFLINE, 1).
@@ -32,7 +49,15 @@
 			   username,
 			   password,
 			   status = ?OFFLINE,
-			   friends = []}).
+			   friends = [],
+			   joined_group = []}).
+
+-record(group, {id,
+				creator,
+				managers,
+				members,
+				name,
+				created_at}).
 
 -record(messages, {uid,
 				   messages = []}).
