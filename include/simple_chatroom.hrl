@@ -6,6 +6,7 @@
 -define(SOCKET_TAB, socket_tab).
 -define(LOGIN_USERS, login_users).
 -define(NOTIFY_TAB, notify_tab).
+-define(GROUP_TAB, group_tab).
 
 -define(LOGIN, 10001).
 -define(LOGOUT, 10002).
@@ -30,12 +31,13 @@
 -define(INVITE, 11011).
 -define(CHANGE_OWNER, 11012).
 -define(REQ_ADD_GROUP, 11013).
+-define(GROUP_INFO, 11014).
 
 -define(RESP_OK, 1000).
 -define(RESP_ERR, 1001).
 
 -define(MESSAGE, 999).
--define(BROADCAST_MESSAGE, 998).
+-define(BROADCAST, 998).
 -define(PUSH_MESSAGE, 997).
 -define(FRIEND_REQ, 996).
 -define(FRIEND_REP, 995).
@@ -53,10 +55,11 @@
 			   joined_group = []}).
 
 -record(group, {id,
-				creator,
+				owner,
 				managers,
 				members,
 				name,
+				forbided,
 				created_at}).
 
 -record(messages, {uid,

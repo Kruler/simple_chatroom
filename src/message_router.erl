@@ -51,6 +51,10 @@ send_notify(To, Code, Payload) ->
 					 payload = Payload},
 	gen_server:cast(?MODULE, Notify).
 
+-spec broadcast(integer(), binary()) -> ok.
+broadcast(UId, Context) ->
+	gen_server:cast({broadcast, UId, Context}).
+
 -spec keep_message_len(integer()) -> integer() | {error, term()}.
 keep_message_len(UId) ->
 	case ets:lookup(?MESSAGE_TAB, UId) of
@@ -96,8 +100,6 @@ start_link(MaxMessageLen) ->
 %% @end
 %%--------------------------------------------------------------------
 init([MaxMessageLen]) ->
-	ets:new(?MESSAGE_TAB, [set, named_table, public]),
-	ets:new(?NOTIFY_TAB, [set, named_table, public]),
 	self() ! load_message,
     {ok, #state{max_queue_len = MaxMessageLen}}.
 
@@ -185,6 +187,14 @@ handle_cast(#notify{to_uid = UId} = Notify, State) ->
 		{error, Reason} ->
 			lager:error("lookup uid ~p in ~p failed: ~p", [UId, ?LOGIN_USERS, Reason])
 	end,
+	{noreply, State};
+
+handle_cast({broadcast, FromUId, Context}, State) ->
+	ets:foldl(
+		fun({ToUId, Pid}, _) ->
+		    Packet = chatroom_util:encode_packet(?BROADCAST, 0, [FromUId, ToUId, Context]),
+			gen_server:cast(Pid, {reply, Packet})
+	end, ok, ?LOGIN_USERS),
 	{noreply, State};
 
 handle_cast({login, UId, Pid}, State) ->

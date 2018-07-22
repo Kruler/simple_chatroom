@@ -35,22 +35,31 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
-	ets:new(?SOCKET_TAB, [set, named_table, public]),
 	Port = application:get_env(?APP, port, 7000),
 	MaxMLen = application:get_env(?APP, max_message_len, 10),
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),
+	GroupHanlerSup = child_supervisor_spec(?MODULE, group_handler_sup, []),
 	ConnectListener = child_worker_spec(connect_listener, [Port]),
 	UserManager = child_worker_spec(user_manager, []),
 	MessageRouter = child_worker_spec(message_router, [MaxMLen]),
+	GroupManager = child_worker_spec(group_manager, []),
+	GroupSyncer = child_worker_spec(group_syncer, []),
 	
 	supervisor_spec(one_for_one, [ChatSessionSup,
+								  GroupHanlerSup,
 								  ConnectListener,
 								  UserManager,
-								  MessageRouter
+								  MessageRouter,
+								  GroupSyncer,
+								  GroupManager
 								  ]);
 
 init([chat_session_sup]) ->
 	Child = child_worker_spec(chat_session, []),
+	supervisor_spec(simple_one_for_one, [Child]);
+
+init([group_handler_sup]) ->
+	Child = child_worker_spec(group_handler, []),
 	supervisor_spec(simple_one_for_one, [Child]).
 
 %%====================================================================

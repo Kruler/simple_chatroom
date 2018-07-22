@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1]).
+-export([]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -25,10 +25,12 @@
 
 -include("simple_chatroom.hrl").
 
--record(state, {group_id,
+-record(state, {id,
 				owner,
 				memebers,
-				managers}).
+				managers,
+				forbided
+				}).
 
 %%%===================================================================
 %%% API
@@ -36,13 +38,11 @@
 group_chat(GroupId, UId, Context) ->
 	PName = chatroom_util:generate_pname(?MODULE, GroupId),
 	gen_server:cast(PName, {group_chat, UId, Context}).
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
-%% @end
-%%--------------------------------------------------------------------
+
+req_add_group(GroupId, UId) ->
+	PName = chatroom_util:generate_pname(?MODULE, GroupId),
+	gen_server:cast(PName, {req_add_group, UId}).	
+
 start() ->
 	case chatroom_util:mnesia_query(group, []) of
 		{ok, Groups} ->
@@ -54,7 +54,11 @@ start() ->
 start(Group) ->
 	#group{id = GroupId} = Group,
 	PName = chatroom_util:generate_pname(?MODULE, GroupId),
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [GroupId], []).
+    supervisor:start_child(group_handler_sup, [Group]).
+
+stop(GroupId) ->
+	PName = chatroom_util:generate_pname(?MODULE, GroupId),
+	gen_server:cast(PName, stop).
 
 
 %%%===================================================================
@@ -106,13 +110,23 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+
 handle_cast({group_chat, UId, Context}, State) ->
-	#state{memebers = Members} = State,
+	#state{memebers = Members, 
+		   id = GroupId} = State,
 	sets:foldl(
 		fun(Member, _) ->
-			message_router:send_message(UI)
-	end, ok, Members)
+			message_router:send_message([GroupId, UId], Member, Context)
+	end, ok, Members),
 	{noreply, State};
+
+% handle_cast({req_add_group, UId}, State) ->
+% 	#state{managers = Managers} = State,
+% 	sets:foldl(
+% 		fun(Member, _) ->
+% 			message_router:send_notify(?REQ_ADD_GROUP, [UId, Group, PushId])
+% 	end, ok, Members),
+% 	{noreply, State#state{}};
 
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
@@ -128,6 +142,16 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info({sync, Group}, State) ->
+	#group{id = GroupId,
+		   members = Members,
+		   managers = Managers,
+		   owner = Owner} = Group,
+	{noreply, State#state{id = GroupId,
+						  memebers = Members,
+						  managers = Managers,
+						  owner = Owner}};
+
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
     {noreply, State}.
