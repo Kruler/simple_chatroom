@@ -42,6 +42,7 @@
 -define(FRIEND_REQ, 996).
 -define(FRIEND_REP, 995).
 -define(REP_ADD_GROUP, 994).
+-define(REP_INVITE, 993).
 
 -define(ONLINE, 0).
 -define(OFFLINE, 1).
