@@ -13,6 +13,7 @@
 %% API
 -export([send_message/3,
 		 send_notify/3,
+		 broadcast/2,
 		 keep_message_len/1,
 		 clear_cache/0,
 		 clear_cache/1]).

@@ -106,8 +106,12 @@ handle_req(?CHANGE_OWNER, ReqId, [UId, SetedUId, GroupId], Socket) ->
     gen_server:cast(group_manager, {?CHANGE_OWNER, ReqId, UId, SetedUId, GroupId, Socket});
 handle_req(?REQ_ADD_GROUP, ReqId, [UId, GroupId], Socket) ->
     gen_server:cast(group_manager, {?REQ_ADD_GROUP, ReqId, UId, GroupId, Socket});
-handle_req(?REP_ADD_GROUP, ReqId, [GroupId, UId, SetedUId], Socket) ->
-    gen_server:cast(group_manager, {?REP_ADD_GROUP, ReqId, UId, GroupId, SetedUId, Socket});
+handle_req(?REP_ADD_GROUP, ReqId, [GroupId, UId, SetedUId, PushId, Rep], Socket) ->
+    gen_server:cast(group_manager, {?REP_ADD_GROUP, ReqId, UId, GroupId, SetedUId, PushId, Rep, Socket});
+handle_req(?REP_INVITE, ReqId, [UId, InviteUId, GroupId, Rep], Socket) ->
+    gen_server:cast(group_manager, {?REP_INVITE, ReqId, UId, GroupId, InviteUId, Rep, Socket});
+handle_req(?GROUP_INFO, ReqId, [GroupId], Socket) ->
+    gen_server:cast(grouop_manager, {?GROUP_INFO, ReqId, GroupId, Socket});
 handle_req(_, _, _, Socket) ->
     reply(invalid_packet(), Socket).
 

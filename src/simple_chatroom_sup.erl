@@ -35,6 +35,11 @@ start_link() ->
 
 %% Child :: {Id,StartFunc,Restart,Shutdown,Type,Modules}
 init([]) ->
+	ets:new(?MESSAGE_TAB, [set, named_table, public]),
+	ets:new(?NOTIFY_TAB, [set, named_table, public]),
+	ets:new(?SOCKET_TAB, [set, named_table, public]),
+	ets:new(?LOGIN_USERS, [set, named_table, public]),
+	ets:new(?LOGIN_USERS, [set, named_table, public, {keypos, #group.id}]),
 	Port = application:get_env(?APP, port, 7000),
 	MaxMLen = application:get_env(?APP, max_message_len, 10),
 	ChatSessionSup = child_supervisor_spec(?MODULE, chat_session_sup, []),

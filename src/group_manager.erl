@@ -91,13 +91,23 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({?CREATE_GROUP, ReqId, UId, Socket}, State) ->
-    GroupId = mnesia:dirty_update_counter(id_count, user, 1),
-    Group = #group{id = GroupId,
-                   members = [UId],
-                   owner = UId,
-                   managers = [UId],
-                   created_at = os:timestamp()},
-    F = fun() -> mnesia:write(Group) end,
+    F = fun() ->
+            case chatroom_util:mnesia_query(user, [{id, UId}]) of
+                {ok, [#user{joined_group = Joined} = User]} ->
+                    GroupId = mnesia:dirty_update_counter(id_count, user, 1),
+                    Group = #group{id = GroupId,
+                                   members = [UId],
+                                   owner = UId,
+                                   managers = [UId],
+                                   created_at = os:timestamp()},
+                    mnesia:write(User#user{joined_group = [GroupId|Joined]}),
+                    mnesia:write(Group);
+                {ok, []} ->
+                    {error, no_such_user};
+                {error, Reason} ->
+                    {error, Reason}
+            end 
+        end,
     Reply = chatroom_util:mnesia_return(F),
     chatroom_util:encode_and_reply(?CREATE_GROUP, ReqId, Reply, Socket), 
     {noreply, State};
@@ -105,7 +115,20 @@ handle_cast({?CREATE_GROUP, ReqId, UId, Socket}, State) ->
 handle_cast({?DISSOLVE_GROUP, ReqId, UId, GroupId, Socket}, State) ->
     F = fun() ->
             case chatroom_util:mnesia_query(group, [{id, GroupId}]) of
-                {ok, [#group{owner = UId}]} ->
+                {ok, [#group{owner = UId,
+                             members = Members}]} ->
+                    lists:foreach(
+                        fun(Member) ->
+                            case chatroom_util:mnesia_query(user, [{uid, Member}]) of
+                                {ok, [#user{joined_group = Joined} = User]} ->
+                                    NJoined = lists:delete(GroupId, Joined),
+                                    mnesia:write(User#user{joined_group = NJoined});
+                                {ok, []} ->
+                                    lager:error("not find the user ~p", [Member]);
+                                {error, Reason} ->
+                                    lager:error("find user ~p failed", [Member, Reason])
+                            end
+                    end, Members),
                     mnesia:delete(group, GroupId, write);
                 {ok, [_]} ->
                     {error, no_permission};
@@ -129,9 +152,9 @@ handle_cast({?SET_MANAGER, ReqId, UId, SetedUId, GroupId, Socket}, State) ->
                     true ->
                         {error, already_manager};
                     false ->
-                        case lists:memeber(SetedUId, Members) of
+                        case lists:member(SetedUId, Members) of
                             false ->
-                                {error, not_memebers};
+                                {error, not_members};
                             true ->
                                 mnesia:write(Group#group{managers = [SetedUId|Managers]})
                         end
@@ -158,9 +181,9 @@ handle_cast({?DELETE_MANAGER, ReqId, UId, SetedUId, GroupId, Socket}, State) ->
                     false ->
                         {error, already_not_manager};
                     true ->
-                        case lists:memeber(SetedUId, Members) of
+                        case lists:member(SetedUId, Members) of
                             false ->
-                                {error, not_memebers};
+                                {error, not_members};
                             true ->
                                 NManagers = lists:delete(SetedUId, Managers),
                                 mnesia:write(Group#group{managers = NManagers})
@@ -271,26 +294,36 @@ handle_cast({?CANCEL_FORBID, ReqId, UId, SetedUId, GroupId, Socket}, State) ->
 
 handle_cast({?KICK, ReqId, UId, SetedUId, GroupId, Socket}, State) ->
     F = fun() ->
-            case chatroom_util:mnesia_query(group, [{id, GroupId}]) of
-                {ok, [Group]} ->
+            case {chatroom_util:mnesia_query(group, [{id, GroupId}]),
+                  chatroom_util:mnesia_query(user, [{uid, SetedUId}])} of
+                {{ok, [Group]}, {ok, [User]}} ->
                     #group{owner = Owner,
                            managers = Managers,
                            members = Members} = Group,
+                    #user{joined_group = Joined} = User,
                     case {lists:member(SetedUId, Managers), lists:member(UId, Managers)} of
                         {true, _} when UId =:= Owner ->
                             NManagers = lists:delete(SetedUId, Managers),
                             NMembers = lists:delete(SetedUId, Members),
+                            NJoined = lists:delete(GroupId, Joined),
                             mnesia:write(Group#group{managers = NManagers,
-                                                     members = NMembers});
+                                                     members = NMembers}),
+                            mnesia:write(User#user{joined_group = NJoined});
                         {false, true} ->
                             NMembers = lists:delete(SetedUId, Members),
-                            mnesia:write(Group#group{members = NMembers});
+                            NJoined = lists:delete(SetedUId, Joined),
+                            mnesia:write(Group#group{members = NMembers}),
+                            mnesia:write(User#user{joined_group = NJoined});
                         _ ->
                             {error, no_permission}
                     end;
-                {ok, []} ->
+                {{ok, []}, _} ->
                     {error, no_such_group};
-                {error, Reason} ->
+                {_, {ok, []}} ->
+                    {error, no_such_user};
+                {{error, Reason}, _} ->
+                    {error, Reason};
+                {_, {error, Reason}} ->
                     {error, Reason}
             end
         end,
@@ -313,7 +346,44 @@ handle_cast({?INVITE, ReqId, UId, InvitedUId, GroupId, Socket}, State) ->
             {error, Reason} ->
                 {error, Reason}
         end,
-    chatroom_util:encode_and_reply(?SET_MANAGER, ReqId, Reply, Socket),    
+    chatroom_util:encode_and_reply(?INVITE, ReqId, Reply, Socket),    
+    {noreply, State};
+
+handle_cast({?REP_INVITE, ReqId, UId, GroupId, InviteUId, Rep, Socket}, State) ->
+    F = fun() -> 
+            message_router:send_notify(InviteUId, ?REP_INVITE, [UId, GroupId, Rep]),
+            case {chatroom_util:mnesia_query(group, [{id, GroupId}]),
+                  chatroom_util:mnesia_query(user, [{uid, UId}])} of
+                {{ok, [#group{members = Members} = Group]},
+                 {ok, [#user{joined_group = Joined} = User]}} when Rep =:= ?RESP_OK ->
+                    NJoined = [GroupId|Joined],
+                    NMembers = [UId|Members],
+                    mnesia:write(User#user{joined_group = NJoined}),
+                    mnesia:write(Group#group{members = NMembers});
+                {{ok, []}, _} ->
+                    {error, no_such_group};
+                {_, {ok, []}} ->
+                    {error, no_such_user};
+                {{error, Reason}, _} ->
+                    {error, Reason};
+                {_, {error, Reason}} ->
+                    {error, Reason};
+                _ ->
+                    ok
+            end
+        end,
+    Reply = chatroom_util:mnesia_return(F),
+    chatroom_util:encode_and_reply(?REP_INVITE, ReqId, Reply, Socket),    
+    {noreply, State};
+
+handle_cast({?REQ_ADD_GROUP, ReqId, UId, GroupId, Socket}, State) ->
+    Reply = group_handler:req_add_group(GroupId, UId),
+    chatroom_util:encode_and_reply(?REQ_ADD_GROUP, ReqId, Reply, Socket),  
+    {noreply, State};
+
+handle_cast({?REP_ADD_GROUP, ReqId, UId, GroupId, SetedUId, PushId, Rep, Socket}, State) ->
+    Reply = group_handler:rep_add_group(GroupId, UId, SetedUId, PushId, Rep),
+    chatroom_util:encode_and_reply(?REQ_ADD_GROUP, ReqId, Reply, Socket), 
     {noreply, State};
 
 handle_cast({?CHANGE_OWNER, ReqId, UId, SetedUId, GroupId, Socket}, State) ->

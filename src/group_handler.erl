@@ -11,7 +11,12 @@
 -behaviour(gen_server).
 
 %% API
--export([]).
+-export([group_chat/3,
+		 req_add_group/2,
+		 rep_add_group/5,
+		 start/0,
+		 start/1,
+		 stop/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -27,9 +32,11 @@
 
 -record(state, {id,
 				owner,
-				memebers,
+				members,
 				managers,
-				forbided
+				forbided,
+				reqs = dict:new(),
+				req_count = 0
 				}).
 
 %%%===================================================================
@@ -41,20 +48,23 @@ group_chat(GroupId, UId, Context) ->
 
 req_add_group(GroupId, UId) ->
 	PName = chatroom_util:generate_pname(?MODULE, GroupId),
-	gen_server:cast(PName, {req_add_group, UId}).	
+	gen_server:cast(PName, {req_add_group, UId}).
+
+rep_add_group(GroupId, UId, SetedUId, PushId, Rep) ->
+	PName = chatroom_util:generate_pname(?MODULE, GroupId),
+	gen_server:cast(PName, {rep_add_group, UId, SetedUId, PushId, Rep}).		
 
 start() ->
 	case chatroom_util:mnesia_query(group, []) of
 		{ok, Groups} ->
-			lists:foreach(fun(Group) -> group_handler:start(Group) end, Groups);
+			lists:foreach(fun(#group{id = GroupId}) -> group_handler:start(GroupId) end, Groups);
 		{error, Reason} ->
 			lager:error("start group failed:~p", [Reason])
 	end.
 
-start(Group) ->
-	#group{id = GroupId} = Group,
+start(GroupId) ->
 	PName = chatroom_util:generate_pname(?MODULE, GroupId),
-    supervisor:start_child(group_handler_sup, [Group]).
+    supervisor:start_child(group_handler_sup, [GroupId]).
 
 stop(GroupId) ->
 	PName = chatroom_util:generate_pname(?MODULE, GroupId),
@@ -76,9 +86,9 @@ stop(GroupId) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Group]) ->
-
-    {ok, #state{}}.
+init([GroupId]) ->
+	self() ! sync,
+    {ok, #state{id = GroupId}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -110,23 +120,53 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-
 handle_cast({group_chat, UId, Context}, State) ->
-	#state{memebers = Members, 
-		   id = GroupId} = State,
-	sets:foldl(
-		fun(Member, _) ->
-			message_router:send_message([GroupId, UId], Member, Context)
-	end, ok, Members),
+	#state{members = Members, 
+		   id = GroupId,
+		   forbided = Forbided} = State,
+	case sets:is_element(UId, Forbided) of
+		false ->
+			sets:foldl(
+				fun(Member, _) ->
+					message_router:send_message([GroupId, UId], Member, Context)
+			end, ok, Members);
+		true ->
+			lager:warning("user ~p is forbided", [UId])
+	end,
 	{noreply, State};
 
-% handle_cast({req_add_group, UId}, State) ->
-% 	#state{managers = Managers} = State,
-% 	sets:foldl(
-% 		fun(Member, _) ->
-% 			message_router:send_notify(?REQ_ADD_GROUP, [UId, Group, PushId])
-% 	end, ok, Members),
-% 	{noreply, State#state{}};
+handle_cast({req_add_group, UId}, State) ->
+	#state{managers = Managers,
+		   reqs = Reqs,
+		   req_count = ReqC,
+		   id = GroupId} = State,
+	sets:foldl(
+		fun(Manager, _) ->
+			message_router:send_notify(Manager, ?REQ_ADD_GROUP, [UId, GroupId, ReqC])
+	end, ok, Managers),
+	{noreply, State#state{req_count = ReqC + 1,
+						  reqs = dict:store(ReqC, UId, Reqs)}};
+
+handle_cast({rep_add_group, UId, SetedUId, PushId, Rep}, State) ->
+	#state{managers = Managers,
+		   reqs = Reqs,
+		   id = GroupId} = State,
+	case dict:find(PushId, Reqs) of
+		UId ->
+			case Rep of
+				?RESP_OK ->
+					add_group(GroupId, SetedUId);
+				_ ->
+					ignore
+			end,
+			sets:foldl(
+				fun(Manager, _) ->
+					message_router:send_notify(Manager, ?REP_ADD_GROUP, [UId, SetedUId, GroupId, PushId, Rep])
+			end, ok, Managers);
+		_ ->
+			ignore
+	end,
+	{noreply, State#state{reqs = dict:erase(PushId, Reqs)}};
 
 handle_cast(_Msg, State) ->
     lager:warning("Can't handle msg: ~p", [_Msg]),
@@ -142,15 +182,41 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_info(sync, #state{id = GroupId} = State) ->
+	case group_sync:sync_group(GroupId) of
+		{ok, Group} ->
+			#group{id = GroupId,
+				   members = Members,
+				   managers = Managers,
+				   owner = Owner,
+				   forbided = Forbided} = Group,
+			NMembers = sets:from_list(Members),
+			NManagers = sets:from_list(Managers),
+			NForbided = sets:from_list(Forbided),
+			{noreply, State#state{id = GroupId,
+								  members = NMembers,
+								  managers = NManagers,
+								  owner = Owner,
+								  forbided = NForbided}};
+		{error, Reason} ->
+			lager:error("sync group ~p failed: ~p", [GroupId, Reason]),
+			{stop, normal, State}
+	end;
+
 handle_info({sync, Group}, State) ->
 	#group{id = GroupId,
 		   members = Members,
 		   managers = Managers,
-		   owner = Owner} = Group,
+		   owner = Owner,
+		   forbided = Forbided} = Group,
+	NMembers = sets:from_list(Members),
+	NManagers = sets:from_list(Managers),
+	NForbided = sets:from_list(Forbided),
 	{noreply, State#state{id = GroupId,
-						  memebers = Members,
-						  managers = Managers,
-						  owner = Owner}};
+						  members = NMembers,
+						  managers = NManagers,
+						  owner = Owner,
+						  forbided = NForbided}};
 
 handle_info(_Info, State) ->
     lager:warning("Can't handle info: ~p", [_Info]),
@@ -185,3 +251,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+add_group(GroupId, UId) ->
+	F = fun() ->
+			case {chatroom_util:mnesia_query(group, [{id, GroupId}]),
+				  chatroom_util:mnesia_query(user, [{uid, UId}])} of
+			  {{ok, [#group{members = Members} = Group]},
+			   {ok, [#user{joined_group = Joined} = User]}} ->
+			  		mensia:write(Group#group{members = [UId|Members]}),
+			  		mensia:write(User#user{joined_group = [GroupId|Joined]});
+			  {{ok, []}, _} ->
+			  		lager:error("no group with id ~p", [GroupId]);
+			  {_, {ok, []}} ->
+			  		lager:error("no user with id ~p", [UId]);
+			  {{error, Reason}, _} ->
+			  		lager:error("find group ~p error: ~p", [GroupId, Reason]);
+			  {_, {error, Reason}} ->
+			  		lager:error("fing user ~p error: ~p", [UId, Reason])
+			end
+		end,
+	mensia:transaction(F).
