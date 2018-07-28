@@ -80,5 +80,5 @@ child_worker_spec(Mod, Args) when is_list(Args) ->
 	{Mod, {Mod, start_link, Args}, transient, ?SHUTDOWN, worker, [Mod]}.
 
 child_supervisor_spec(Mod, SupName, Args) when is_list(Args) ->
-	{Mod, {?MODULE, start_supervisor, [Mod, SupName, Args]}, 
+	{SupName, {?MODULE, start_supervisor, [Mod, SupName, Args]}, 
 		  transient, ?SHUTDOWN, supervisor, [Mod]}.

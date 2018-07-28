@@ -69,7 +69,7 @@ start_link() ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Group]) ->
+init([]) ->
 	self() ! sync_from_db,
 	case mnesia:subscribe({table, group, simple}) of
 	    {ok, _} -> 
@@ -126,7 +126,7 @@ handle_cast(_Msg, State) ->
 %%--------------------------------------------------------------------
 handle_info(sync_from_db, State) ->
 	case ets:delete_all_objects(?GROUP_TAB) of
-		ok ->
+		true ->
 			case chatroom_util:mnesia_query(group, []) of
 				{ok, Groups} ->
 					lists:foreach(
